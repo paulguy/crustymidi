@@ -1,0 +1,168 @@
+
+flags(MOVE_FLAGS_TYPE_MASK) = MOVE_FLAGS_TYPE_VAR
+    variable_is_argument(val)
+        val(flags(MOVE_FLAGS_TYPE_MASK)) = MOVE_FLAGS_TYPE_VAR
+            flags(MOVE_FLAGS_INDEX_TYPE_MASK) = MOVE_FLAGS_INDEX_TYPE_VAR
+                variable_is_argument(index)
+                    index(flags(MOVE_FLAG_TYPE_MASK)) = MOVE_FLAGS_TYPE_VAR
+                        argument variable referencing variable with argument
+                            index referencing variable
+                        var(arg(val)):[index(arg(val))+](var(arg(index)):index(arg(index)))
+                        read/write/pass:
+                            1 read variable referenced from argument index at
+                              index referenced from argument index in to index
+                    index(flags(MOVE_FLAG_TYPE_MASK)) = MOVE_FLAGS_TYPE_IMMEDIATE
+                        argument variable referencing variable with argument
+                            index referencing immediate
+                        var(arg(val)):[index(arg(val))+]arg(index)
+                        read/write/pass:
+                            1 reference from argument index in to index
+                !variable_is_argument(index)
+                    argument variable referencing variable with variable index
+                    var(arg(val)):[index(arg(val))+](var(index):0)
+                    read/write/pass:
+                        1 read variable index at 0 in to index
+            flags(MOVE_FLAGS_INDEX_TYPE_MASK) = MOVE_FLAGS_INDEX_TYPE_IMMEDIATE
+                argument variable referencing variable with immediate index
+                var(arg(val)):[index(arg(val))+]index
+                read/write/pass:
+                    1 index is already index
+            read:
+                2 if index < 0
+                      out of bounds
+                3 add to index referenced from argument val
+                4 if index > length of variable refernced from argument val
+                      out of bounds
+                5 ptr referenced from argument val in to ptr
+                6 read variable referenced from argument val at index
+            write:
+                1 steps 1-5 above
+                2 write variable referenced from argument val at index
+            pass:
+                1 steps 1-5 above
+                2 pass flags as var
+                3 pass val as variable referenced from argument val
+                4 pass index as index
+                5 pass ptr as ptr
+        val(flags(MOVE_FLAGS_TYPE_MASK)) = MOVE_FLAGS_TYPE_IMMEDIATE
+            these are weird ones.  They all behave as a variable with 1 element
+
+            flags(MOVE_FLAGS_INDEX_TYPE_MASK) = MOVE_FLAGS_INDEX_TYPE_VAR
+                variable_is_argument(index)
+                    index(flags(MOVE_FLAG_TYPE_MASK)) = MOVE_FLAGS_TYPE_VAR
+                        argument variable referencing immediate with argument
+                            index referencing variable
+                        arg(val):0
+                        read/write/pass:
+                            1 read variable referenced from argument index at 
+                              index referenced from argument index in to index
+                    index(flags(MOVE_FLAG_TYPE_MASK)) = MOVE_FLAGS_TYPE_IMMEDIATE
+                        argument variable referencing immediate with argument
+                            index referencing immediate
+                        arg(val):0
+                        read/write/pass:
+                            1 reference from argument index in to index
+                !variable_is_argument(index)
+                    argument variable referencing immediate with variable index
+                    arg(val):0
+                    read/write/pass:
+                        1 read variable index at 0 in to index
+            flags(MOVE_FLAGS_INDEX_TYPE_MASK) = MOVE_FLAGS_INDEX_TYPE_IMMEDIATE
+                argument variable referencing immediate with immediate index
+                arg(val):0
+                read/write/pass:
+                    1 index is already index
+            read:
+                2 if index < 0
+                      out of bounds
+                3 if index > 0
+                      out of bounds
+                4 reference from argument val in to val
+            write:
+                1 steps 1-3 above
+                2 update argument referenced from val
+            pass:
+                1 steps 1-3 above
+                2 pass flags as immediate
+                3 pass val from argument val
+    !variable_is_argument(val)
+        flags(MOVE_FLAGS_INDEX_TYPE_MASK) = MOVE_FLAGS_INDEX_TYPE_VAR
+            variable_is_argument(index)
+                index(flags(MOVE_FLAGS_TYPE_MASK)) = MOVE_FLAGS_TYPE_VAR
+                    variable with argument index referencing variable 
+                    var(val):(var(arg(index)):index(arg(index)))
+                    read/write/pass:
+                        1 read variable referenced from argument index at index
+                          referenced from argument index in to index
+                index(flags(MOVE_FLAGS_TYPE_MASK)) = MOVE_FLAGS_TYPE_IMMEDIATE
+                    variable with argument index referencing immediate
+                    var(val):arg(index)
+                    read/write/pass:
+                        1 reference from argument index in to index
+            !variable_is_argument(index)
+                variable with variable index
+                var(val):(var(index):0)
+                read/write/pass:
+                    1 read variable index at 0 in to index
+        flags(MOVE_FLAGS_INDEX_TYPE_MASK) = MOVE_FLAGS_INDEX_TYPE_IMMEDIATE
+            variable with immediate index
+            var(val):index
+            read/write/pass:
+                1 index is already index
+        read:
+            2 if index < 0
+                  out of bounds
+            3 if index > length of variable val
+                  out of bounds
+            4 if variable val is global
+                  offset of variable val in to ptr
+              else
+                  offset of variable val subtracted from ptr in to ptr
+            5 read variable val at index
+        write:
+            1 steps 1-3 above
+            2 write variable val at index
+        pass:
+            1 steps 1-3 above
+            2 pass flags as var
+            3 pass val as val
+            4 pass index as index
+            5 pass ptr as ptr
+flags(MOVE_FLAGS_TYPE_MASK) = MOVE_FLAGS_TYPE_LENGTH
+    variable_is_argument(val)
+        flags(MOVE_FLAGS_TYPE_MASK) = MOVE_FLAGS_TYPE_VAR
+            length of argument variable referencing a variable
+            var(arg(val)):[index(arg(val))]
+            read:
+                1 index referenced from argument val in to index
+                2 length of variable referenced from argument val in to val subtracted by index
+            pass:
+                1 steps 1-2 above
+                2 pass flags as immediate
+                3 pass val as val
+        flags(MOVE_FLAGS_TYPE_MASK) = MOVE_FLAGS_TYPE_IMMEDIATE
+            length of argument variable referencing an immediate
+            1
+            read:
+                1 1 in to val
+            pass:
+                1 pass flags as immediate
+                2 pass val as 1
+    !variable_is_argument(val)
+        length of a variable
+        var(val):
+        read:
+            1 length of variable val in to val
+        pass:
+            1 step 1 above
+            2 pass flags as immediate
+            3 pass val as val
+flags(MOVE_FLAGS_TYPE_MASK) = MOVE_FLAGS_TYPE_IMMEDIATE
+    immediate
+    val
+    read:
+        1 val is already val
+    pass:
+        1 step 1 above
+        2 pass flags as immediate
+        3 pass val as val

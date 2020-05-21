@@ -1,0 +1,75 @@
+keywords:
+ preprocessor:
+  include <filename> - include a file.  only happens once so you can't create a
+                       macro which would include additional files.  Circular
+                       includes aren't accounted for so be careful.
+  expr <var> <expression> - evaluate an expression and place in to var.  vars
+                            appearing in an expression must have been defined
+                            before.  var names automatically replace their name
+                            found in any string following the expr statement
+                            with the value in var at that time.  these vars do
+                            not carry over to execution.  Expressions evaluate
+                            all numbers as signed int types.
+  macro <name> <argname1> <argname2> ... - define a preprocessor macro, may only
+                                           have MAX_TOKENS - 2 arguments
+                                           (currently 8).  strings in macros
+                                           containing argument names will have
+                                           the substring replaced by the
+                                           argument passed to the macro.  string
+                                           replacements won't be reevaluated for
+                                           additional replacements.
+  endmacro <name> - mark the end of macro <name>
+  <name> <args> - insert a macro
+  if <var> <name> <args> - insert a macro if var is nonzero
+  stack <size> - add <size> to running stack size
+  proc <name> <argname1> <argname2> ... - define a procedure, references to
+                                          arguments are passed in and treated as
+                                          local but refer to the memory they are
+                                          backed by when called.
+  label <name> - define a procdure-local label
+
+  static <name> [initializer] - define a global variable, all variables are of
+                                signed "int" type, which may differ depending on
+                                platform.  Any behaviors are as they are in C
+                                (or whatever an implementation may be written
+                                in.).  Initialized to 0.
+  local <name> [initializer] - define a procedure-local variable.  Initialized
+                               to 0 on every function call, or to initializer.
+  static/local <name> ints <size> - same as above but an array of size <size>.
+                                     Cleared to 0.
+  static/local <name> ints "<content>" - same as above but an array initialized
+                                          with the supplied space separated list
+                                          of numbers
+  static/local <name> floats "<content>" - same as above, just floats.
+  static/local <name> string "<content>" - creates an array of 8 bit values with
+                                           <content>, stores and loads are cast
+                                           to/from 8 bits.  Is not terminated.
+                                           Consider the expense of calls with
+                                           local arrays or strings.
+                                           
+
+  also looks for call and ret
+
+ instructions:
+  call <proc> <args> - call a procedure, passing in references.
+  ret - return from procedure, also marks the end of a procedure block
+
+  move <dest> <src> - move src in to result and dest. dest or src may be a
+                      variable or index in to an array.  Accessible by 
+                      <name>:<offset>, or just <name>: to return the length.
+                      Offset may be a literal or variable.  Out of bounds
+                      accesses will end execution with an error.
+  add <dest> <src> - add src to dest and move in to result and dest
+  sub <dest> <src> - subtract
+  and <dest> <src> - bitwise and
+  or <dest> <src> - bitwise or
+  xor <dest> <src> - bitwise xor
+  shr <var> <count> - bitwise shift right by count
+  shl <var> <count> - bitwise shift left by count
+  cmp <op1> <op2> - add op1 and op2 and move in to result
+
+  jump <label> - jump to a label
+  jumpn <label> - jump if result is not zero
+  jumpz <label> - jump if result is zero
+  jumpl <label> - jump if result is less than zero
+  jumpg <label> - jump if result is greater than zero

@@ -1,0 +1,109 @@
+; based on onelonecoder's STL-less C++ mandelbrot code
+; https://github.com/OneLoneCoder/olcPixelGameEngine/blob/master/Videos/OneLoneCoder_PGE_Mandelbrot.cpp
+
+;should be a multiple of 256
+expr iterations 1024
+expr xres 3840
+expr yres 2160
+
+static xmin floats -2.0
+static ymin floats -1.0
+static xmax floats 1.0
+static ymax floats 1.0
+
+static xstep floats 0.0
+static ystep floats 0.0
+static xpos floats 0.0
+static ypos floats 0.0
+
+static cr floats 0.0
+static ci floats 0.0
+static zr floats 0.0
+static zi floats 0.0
+static re floats 0.0
+static im floats 0.0
+
+static temp floats 0.0
+static temp2 floats 0.0
+
+static x
+static y
+static i
+
+expr realiter "iterations - 1"
+expr iterdiv "iterations / 256"
+
+proc init
+    ; get pixel steps
+    move xstep xmax
+    sub xstep xmin
+    div xstep xres 
+
+    move ystep ymax
+    sub ystep ymin
+    div ystep yres 
+
+    move y 0
+    move ypos ymin
+    label yloop
+        move x 0
+        move xpos xmin
+        move ci ypos
+
+        label xloop
+            move cr xpos
+            move zr 0
+            move zi 0
+
+            move i 0
+            label iterloop
+                ; re = zr * zr - zi * zi + cr
+                move temp zi
+                mul temp zi
+                move re zr
+                mul re zr
+                sub re temp
+                add re cr
+                
+                ; im = zr * zi * 2.0 + ci
+                move im zr
+                mul im zi
+                mul im 2
+                add im ci
+
+                move zr re
+                move zi im
+
+                ; zr * zr + zi * zi < 4.0
+                move temp2 zi
+                mul temp2 zi
+                move temp zr
+                mul temp zr
+                add temp temp2
+                cmp temp 4
+                jumpg iterexit
+
+                add i 1
+                cmp i realiter
+                jumpl iterloop
+                label iterexit
+
+            div i iterdiv
+            move out i
+
+            add xpos xstep
+            add x 1
+            cmp x xres
+            jumpl xloop
+
+        add ypos ystep
+        add y 1
+        move printint y
+        move err 32
+        move printint yres
+        move err 13
+        cmp y yres
+        jumpl yloop
+
+    move out 10
+ret

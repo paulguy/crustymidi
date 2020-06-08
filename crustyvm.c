@@ -1,10 +1,10 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 #include <stddef.h>
 
 #ifdef CRUSTY_TEST
-#include <stdio.h>
 #include <stdarg.h>
 #endif
 
@@ -41,6 +41,23 @@
                     (X) == '7' || \
                     (X) == '8' || \
                     (X) == '9')
+
+#define ISHEXDIGIT(X) ((X) == '0' || \
+                       (X) == '1' || \
+                       (X) == '2' || \
+                       (X) == '3' || \
+                       (X) == '4' || \
+                       (X) == '5' || \
+                       (X) == '6' || \
+                       (X) == '7' || \
+                       (X) == '8' || \
+                       (X) == '9' || \
+                       (X) == 'a' || (X) == 'A' || \
+                       (X) == 'b' || (X) == 'B' || \
+                       (X) == 'c' || (X) == 'C' || \
+                       (X) == 'd' || (X) == 'D' || \
+                       (X) == 'e' || (X) == 'E' || \
+                       (X) == 'f' || (X) == 'F')
 
 typedef struct {
     unsigned int ip;
@@ -988,6 +1005,7 @@ static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
     int parens = 0;
     int numstart = -1;
     int valsize;
+    int ishex = 0;
 
     int i;
     int exprlen = strlen(expression);
@@ -1072,28 +1090,36 @@ static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
         } else {
             if(!ISDIGIT(expression[i])) {
                 /* check if hexadecimal */
-                if(expression[i] == 'x') {
-                    if(i != numstart + 1) {
-                        LOG_PRINTF_LINE(cvm,
-                            "x in hexadecimal number must be second character.\n");
-                        goto error;
+                if(ishex == 1) {
+                    if(ISHEXDIGIT(expression[i])) {
+                        continue;
                     }
-                    if(expression[numstart] != '0') {
-                        LOG_PRINTF_LINE(cvm,
-                            "x in hexadecimal number must follow a 0.\n");
-                        goto error;
+                } else {
+                    if(expression[i] == 'x') {
+                        if(i != numstart + 1) {
+                            LOG_PRINTF_LINE(cvm,
+                                "x in hexadecimal number must be second character.\n");
+                            goto error;
+                        }
+                        if(expression[numstart] != '0') {
+                            LOG_PRINTF_LINE(cvm,
+                                "x in hexadecimal number must follow a 0.\n");
+                            goto error;
+                        }
+                        if(i == exprlen - 1) {
+                            LOG_PRINTF_LINE(cvm,
+                                "x in hexadecimal number found at end of expression.\n");
+                            goto error;
+                        }
+                        if(!ISHEXDIGIT(expression[i+1])) {
+                            LOG_PRINTF_LINE(cvm,
+                                "x in hexadecimal number must be immediately "
+                                "followed by digits.\n");
+                            goto error;
+                        }
+                        ishex = 1;
+                        continue;
                     }
-                    if(i == exprlen - 1) {
-                        LOG_PRINTF_LINE(cvm,
-                            "x in hexadecimal number found at end of expression.\n");
-                        goto error;
-                    }
-                    if(!ISDIGIT(expression[i+1])) {
-                        LOG_PRINTF_LINE(cvm,
-                            "x in hexadecimal number must be immediately followed by digits.\n");
-                        goto error;
-                    }
-                    continue;
                 }
 
                 temp = add_expr(cvm, CRUSTY_EXPR_NUMBER,
@@ -1104,6 +1130,7 @@ static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
                 }
                 expr = temp;
                 numstart = -1;
+                ishex = 0;
                 i--;
             }
         }
@@ -1118,7 +1145,7 @@ static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
         /* no need to store a temp character because the end of the expression
            is already NULL terminated */
         temp = add_expr(cvm, CRUSTY_EXPR_NUMBER,
-                        strtol(&(expression[numstart]), NULL, 10),
+                        strtol(&(expression[numstart]), NULL, 0),
                         expr, &exprmem);
         if(temp == NULL) {
             goto error;
@@ -2158,21 +2185,6 @@ static int symbols_verify(CrustyVM *cvm) {
                 ret = -1;
             }
 
-            if((cvm->var[i].intinit != NULL && cvm->var[i].chrinit != NULL) ||
-               (cvm->var[i].chrinit != NULL && cvm->var[i].floatinit != NULL) ||
-               (cvm->var[i].floatinit != NULL && cvm->var[i].intinit != NULL)) {
-                LOG_PRINTF(cvm, "Local variable %s has multiple initializers set.\n",
-                           cvm->var[i].name);
-                ret = -1;
-            }
-
-            if((cvm->var[i].type == CRUSTY_TYPE_INT && cvm->var[i].intinit == NULL) ||
-               (cvm->var[i].type == CRUSTY_TYPE_FLOAT && cvm->var[i].floatinit == NULL) ||
-               (cvm->var[i].type == CRUSTY_TYPE_CHAR && cvm->var[i].chrinit == NULL)) {
-               LOG_PRINTF(cvm, "Local variable %s has no initializer for type.\n",
-                          cvm->var[i].name);
-            }
-
             for(j = 0; j < cvm->var[i].proc->vars; j++) {
                 if(cvm->var[i].proc == cvm->var[i].proc->var[j]->proc) {
                     break;
@@ -2183,6 +2195,30 @@ static int symbols_verify(CrustyVM *cvm) {
                                 "referenced by variable %s.\n",
                            cvm->var[i].proc->name, cvm->var[i].name);
                 ret = -1;
+            }
+
+            if(variable_is_argument(&(cvm->var[i]))) {
+                if(cvm->var[i].intinit != NULL ||
+                   cvm->var[i].chrinit != NULL ||
+                   cvm->var[i].floatinit != NULL) {
+                    LOG_PRINTF(cvm, "Local argument variable %s with initializer set.\n",
+                               cvm->var[i].name);
+                }
+            } else {
+                if((cvm->var[i].intinit != NULL && cvm->var[i].chrinit != NULL) ||
+                   (cvm->var[i].chrinit != NULL && cvm->var[i].floatinit != NULL) ||
+                   (cvm->var[i].floatinit != NULL && cvm->var[i].intinit != NULL)) {
+                    LOG_PRINTF(cvm, "Local variable %s has multiple initializers set.\n",
+                               cvm->var[i].name);
+                    ret = -1;
+                }
+
+                if((cvm->var[i].type == CRUSTY_TYPE_INT && cvm->var[i].intinit == NULL) ||
+                   (cvm->var[i].type == CRUSTY_TYPE_FLOAT && cvm->var[i].floatinit == NULL) ||
+                   (cvm->var[i].type == CRUSTY_TYPE_CHAR && cvm->var[i].chrinit == NULL)) {
+                   LOG_PRINTF(cvm, "Local variable %s has no initializer for type.\n",
+                              cvm->var[i].name);
+                }
             }
         }
     }
@@ -2760,7 +2796,8 @@ static int check_move_arg(CrustyVM *cvm,
 
 static int check_math_instruction(CrustyVM *cvm,
                                   const char *name,
-                                  unsigned int i) {
+                                  unsigned int i,
+                                  unsigned int notcmp) {
     if(i + MOVE_ARGS > cvm->insts - 1) {
         LOG_PRINTF_LINE(cvm, "Instruction memory ends before end "
                              "of %s instruction.\n", name);
@@ -2771,7 +2808,7 @@ static int check_math_instruction(CrustyVM *cvm,
     LOG_PRINTF_BARE(cvm, "%s ", name);
 #endif
     if(check_move_arg(cvm,
-                      1,
+                      notcmp,
                       cvm->inst[i+MOVE_DEST_FLAGS],
                       cvm->inst[i+MOVE_DEST_VAL],
                       cvm->inst[i+MOVE_DEST_INDEX]) < 0) {
@@ -2793,8 +2830,8 @@ static int check_math_instruction(CrustyVM *cvm,
     return(0);
 }
 
-#define MATH_INSTRUCTION(NAME) \
-    if(check_math_instruction(cvm, NAME, i) < 0) { \
+#define MATH_INSTRUCTION(NAME, NOTCMP) \
+    if(check_math_instruction(cvm, NAME, i, (NOTCMP)) < 0) { \
         return(-1); \
     }
 
@@ -2858,41 +2895,42 @@ static int check_jump_instruction(CrustyVM *cvm,
 static int check_instruction(CrustyVM *cvm,
                       CrustyProcedure **proc,
                       unsigned int i) {
+#ifdef CRUSTY_TEST
     LOG_PRINTF(cvm, "%d: ", i);
-
+#endif
     switch(cvm->inst[i]) {
         case CRUSTY_INSTRUCTION_TYPE_MOVE:
-            MATH_INSTRUCTION("move")
+            MATH_INSTRUCTION("move", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_ADD:
-            MATH_INSTRUCTION("add")
+            MATH_INSTRUCTION("add", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_SUB:
-            MATH_INSTRUCTION("sub")
+            MATH_INSTRUCTION("sub", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_MUL:
-            MATH_INSTRUCTION("mul")
+            MATH_INSTRUCTION("mul", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_DIV:
-            MATH_INSTRUCTION("div")
+            MATH_INSTRUCTION("div", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_AND:
-            MATH_INSTRUCTION("and")
+            MATH_INSTRUCTION("and", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_OR:
-            MATH_INSTRUCTION("or")
+            MATH_INSTRUCTION("or", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_XOR:
-            MATH_INSTRUCTION("xor")
+            MATH_INSTRUCTION("xor", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_SHR:
-            MATH_INSTRUCTION("shr")
+            MATH_INSTRUCTION("shr", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_SHL:
-            MATH_INSTRUCTION("shl")
+            MATH_INSTRUCTION("shl", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_CMP:
-            MATH_INSTRUCTION("cmp")
+            MATH_INSTRUCTION("cmp", 0)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_JUMP:
             JUMP_INSTRUCTION("jump")
@@ -2931,7 +2969,9 @@ static int check_instruction(CrustyVM *cvm,
 #endif
 
             for(j = 0; j < callProc->args; j++) {
+#ifdef CRUSTY_TEST
                 LOG_PRINTF_BARE(cvm, " ");
+#endif
                 if(check_move_arg(cvm,
                                   0,
                                   cvm->inst[i + CALL_START_ARGS + (j * CALL_ARG_SIZE) + CALL_ARG_FLAGS],
@@ -2948,8 +2988,9 @@ static int check_instruction(CrustyVM *cvm,
             return(CALL_PROCEDURE + (callProc->args * 3) + 1);
         case CRUSTY_INSTRUCTION_TYPE_RET:
             /* takes no arguments so it can't end early */
+#ifdef CRUSTY_TEST
             LOG_PRINTF_BARE(cvm, "ret\n");
-
+#endif
             if(proc != NULL) {
                 *proc = NULL;
             }
@@ -2980,7 +3021,6 @@ static int codeverify(CrustyVM *cvm) {
                 LOG_PRINTF(cvm, "proc %s\n", curproc->name);
 #endif
             } else {
-                LOG_PRINTF(cvm, "%u %u\n", cvm->logline, cvm->proc[procnum].start);
                 LOG_PRINTF_LINE(cvm, "BUG: code line not in a procedure.\n");
                 check_instruction(cvm, NULL, i);
                 return(-1);
@@ -3181,7 +3221,6 @@ CrustyVM *crustyvm_new(const char *name,
         }
         fclose(out);
     }
-#endif
 
     if(cvm->flags & CRUSTY_FLAG_OUTPUT_PASSES) {
         if(write_lines(cvm, "tokenize.cvm") < 0) {
@@ -3190,6 +3229,7 @@ CrustyVM *crustyvm_new(const char *name,
             return(NULL);
         }
     }
+#endif
 
     for(i = 0; i < MAX_PASSES; i++) {
         snprintf(namebuffer, sizeof(namebuffer), "preprocess %d", i + 1);
@@ -3211,6 +3251,7 @@ CrustyVM *crustyvm_new(const char *name,
             return(NULL);
         }
 
+#ifdef CRUSTY_TEST
         if(cvm->flags & CRUSTY_FLAG_OUTPUT_PASSES) {
             snprintf(namebuffer, sizeof(namebuffer), "preprocess%03d.cvm", i + 1);
             if(write_lines(cvm, namebuffer) < 0) {
@@ -3219,6 +3260,7 @@ CrustyVM *crustyvm_new(const char *name,
                 return(NULL);
             }
         }
+#endif
 
         if(foundmacro == 0) {
             break;
@@ -3272,6 +3314,7 @@ CrustyVM *crustyvm_new(const char *name,
         return(NULL);
     }
 
+#ifdef CRUSTY_TEST
     /* output a text file because it is no longer a valid cvm source file */
     if(cvm->flags & CRUSTY_FLAG_OUTPUT_PASSES) {
         if(write_lines(cvm, "symbols scan.txt") < 0) {
@@ -3281,7 +3324,6 @@ CrustyVM *crustyvm_new(const char *name,
         }
     }
 
-#ifdef CRUSTY_TEST
     cvm->stage = "symbols list";
     LOG_PRINTF(cvm, "Global Variables:\n");
     for(i = 0; i < cvm->vars; i++) {
@@ -3991,6 +4033,7 @@ int fetch_val(CrustyVM *cvm,
                     ptr,
                     &(cvm->var[val]),
                     index) < 0) {
+            cvm->status = CRUSTY_STATUS_CALLBACK_FAILED;
             return(-1);
         }
     } else {
@@ -4011,6 +4054,7 @@ int store_result(CrustyVM *cvm,
                  ptr,
                  &(cvm->var[val]),
                  index) < 0) {
+        cvm->status = CRUSTY_STATUS_CALLBACK_FAILED;
         return(-1);
     }
 
@@ -4029,10 +4073,10 @@ int store_result(CrustyVM *cvm,
 
 #define FETCH_VALS \
     if(update_dest_ref(cvm, &destflags, &destval, &destindex, &destptr) < 0) { \
-        return(-1); \
+        break; \
     } \
     if(update_src_ref(cvm, &srcflags, &srcval, &srcindex, &srcptr) < 0) { \
-        return(-1); \
+        break; \
     } \
     if(fetch_val(cvm, \
                  srcflags, \
@@ -4041,7 +4085,7 @@ int store_result(CrustyVM *cvm,
                  &intoperand, \
                  &floatoperand, \
                  srcptr) < 0) { \
-        return(-1); \
+        break; \
     } \
     if(fetch_val(cvm, \
                  destflags, \
@@ -4050,7 +4094,7 @@ int store_result(CrustyVM *cvm,
                  &(cvm->intresult), \
                  &(cvm->floatresult), \
                  destptr) < 0) { \
-        return(-1); \
+        break; \
     }
 
 #define MATH_INSTRUCTION(OP) \
@@ -4087,7 +4131,7 @@ int store_result(CrustyVM *cvm,
     } \
     \
     if(store_result(cvm, destval, destindex, destptr) < 0) { \
-        return(-1); \
+        break; \
     } \
     \
     cvm->ip += MOVE_ARGS + 1;
@@ -4101,7 +4145,7 @@ int store_result(CrustyVM *cvm,
         if(cvm->var[srcval].type == CRUSTY_TYPE_FLOAT || \
            cvm->var[destval].type == CRUSTY_TYPE_FLOAT) { \
             cvm->status = CRUSTY_STATUS_INVALID_INSTRUCTION; \
-            return(-1); \
+            break; \
         } \
     } \
     \
@@ -4109,7 +4153,7 @@ int store_result(CrustyVM *cvm,
     cvm->resulttype = CRUSTY_TYPE_INT; \
     \
     if(store_result(cvm, destval, destindex, destptr) < 0) { \
-        return(-1); \
+        break; \
     } \
     \
     cvm->ip += MOVE_ARGS + 1;
@@ -4152,7 +4196,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
         if(check_instruction(cvm, NULL, cvm->ip) < 0) {
             LOG_PRINTF(cvm, "Invalid instruction at %u.\n", cvm->ip);
             cvm->status = CRUSTY_STATUS_INVALID_INSTRUCTION;
-            return(-1);
+            return(cvm->status);
         }
     }
 #endif
@@ -4162,10 +4206,10 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
             POPULATE_ARGS
 
             if(update_dest_ref(cvm, &destflags, &destval, &destindex, &destptr) < 0) {
-                return(-1);
+                break;
             }
             if(update_src_ref(cvm, &srcflags, &srcval, &srcindex, &srcptr) < 0) {
-                return(-1);
+                break;
             }
 
             if(fetch_val(cvm,
@@ -4175,7 +4219,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
                          &(cvm->intresult),
                          &(cvm->floatresult),
                          srcptr) < 0) {
-                return(-1);
+                break;
             }
 
             if(srcflags == MOVE_FLAG_VAR) {
@@ -4198,7 +4242,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
             }
 
             if(store_result(cvm, destval, destindex, destptr) < 0) {
-                return(-1);
+                break;
             }
 
             cvm->ip += MOVE_ARGS + 1;
@@ -4235,7 +4279,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
                cvm->var[srcval].type == CRUSTY_TYPE_FLOAT) {
                 if(cvm->var[destval].type == CRUSTY_TYPE_FLOAT) {
                     cvm->status = CRUSTY_STATUS_INVALID_INSTRUCTION;
-                    return(-1);
+                    break;
                 } else {
                     cvm->intresult = cvm->intresult >> intoperand;
                     cvm->resulttype = CRUSTY_TYPE_INT;
@@ -4243,7 +4287,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
             } else {
                 if(cvm->var[destval].type == CRUSTY_TYPE_FLOAT) {
                     cvm->status = CRUSTY_STATUS_INVALID_INSTRUCTION;
-                    return(-1);
+                    break;
                 } else {
                     cvm->intresult = cvm->intresult >> intoperand;
                     cvm->resulttype = CRUSTY_TYPE_INT;
@@ -4251,7 +4295,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
             }
 
             if(store_result(cvm, destval, destindex, destptr) < 0) {
-                return(-1);
+                break;
             }
 
             cvm->ip += MOVE_ARGS + 1;
@@ -4267,7 +4311,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
                cvm->var[srcval].type == CRUSTY_TYPE_FLOAT) {
                 if(cvm->var[destval].type == CRUSTY_TYPE_FLOAT) {
                     cvm->status = CRUSTY_STATUS_INVALID_INSTRUCTION;
-                    return(-1);
+                    break;
                 } else {
                     cvm->intresult = cvm->intresult << intoperand;
                     cvm->resulttype = CRUSTY_TYPE_INT;
@@ -4275,7 +4319,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
             } else {
                 if(cvm->var[destval].type == CRUSTY_TYPE_FLOAT) {
                     cvm->status = CRUSTY_STATUS_INVALID_INSTRUCTION;
-                    return(-1);
+                    break;
                 } else {
                     cvm->intresult = cvm->intresult << intoperand;
                     cvm->resulttype = CRUSTY_TYPE_INT;
@@ -4283,7 +4327,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
             }
 
             if(store_result(cvm, destval, destindex, destptr) < 0) {
-                return(-1);
+                break;
             }
 
             cvm->ip += MOVE_ARGS + 1;
@@ -4291,7 +4335,32 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
         case CRUSTY_INSTRUCTION_TYPE_CMP:
             POPULATE_ARGS
 
-            FETCH_VALS
+            /* this one is a bit special because destination never needs to be
+               written to, so treat both as src references */
+            if(update_src_ref(cvm, &destflags, &destval, &destindex, &destptr) < 0) {
+                break;
+            }
+            if(update_src_ref(cvm, &srcflags, &srcval, &srcindex, &srcptr) < 0) {
+                break;
+            }
+            if(fetch_val(cvm,
+                         srcflags,
+                         srcval,
+                         srcindex,
+                         &intoperand,
+                         &floatoperand,
+                         srcptr) < 0) {
+                break;
+            }
+            if(fetch_val(cvm,
+                         destflags,
+                         destval,
+                         destindex,
+                         &(cvm->intresult),
+                         &(cvm->floatresult),
+                         destptr) < 0) {
+                break;
+            }
 
             if(srcflags == MOVE_FLAG_VAR) {
                 if(cvm->var[srcval].type == CRUSTY_TYPE_FLOAT &&
@@ -4347,7 +4416,7 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
             if(call(cvm,
                     cvm->inst[cvm->ip + CALL_PROCEDURE],
                     cvm->ip + CALL_START_ARGS) < 0) {
-                return(-1);
+                break;
             }
 
             /* no need to update ip */
@@ -4451,12 +4520,25 @@ int crustyvm_run(CrustyVM *cvm, const char *procname) {
     return(0);
 }
 
+static CrustyLine *inst_to_line(CrustyVM *cvm, unsigned int inst) {
+    unsigned int i;
+
+    for(i = 0; i < cvm->lines; i++) {
+        if(cvm->line[i].instruction == inst) {
+            return(&(cvm->line[i]));
+        }
+    }
+
+    return(NULL);
+}
+
 void crustyvm_debugtrace(CrustyVM *cvm, int full) {
-    unsigned int csp, sp;
+    unsigned int csp, sp, ip;
     unsigned int flags, val, index, ptr;
     unsigned int i, j;
     CrustyProcedure *proc;
     const char *temp;
+    CrustyLine *line;
 
     temp = cvm->stage;
     cvm->stage = "debug trace";
@@ -4466,10 +4548,17 @@ void crustyvm_debugtrace(CrustyVM *cvm, int full) {
 
     csp = cvm->csp;
     sp = cvm->sp;
+    ip = cvm->ip;
 
     while(csp > 0) {
         proc = &(cvm->proc[cvm->cstack[csp - 1].proc]);
-        LOG_PRINTF(cvm, "%u: %s", csp, proc->name);
+        LOG_PRINTF(cvm, "%u: %s@", csp, proc->name);
+        line = inst_to_line(cvm, ip);
+        if(line == NULL) {
+            LOG_PRINTF_BARE(cvm, "invalid");
+        } else {
+            LOG_PRINTF_BARE(cvm, "%s:%u", line->module, line->line);
+        }
         for(i = 0; i < proc->args; i++) {
             LOG_PRINTF_BARE(cvm, " %s", proc->var[i]->name);
         }
@@ -4538,6 +4627,7 @@ void crustyvm_debugtrace(CrustyVM *cvm, int full) {
         }
 
         sp -= proc->stackneeded;
+        ip = cvm->cstack[csp - 1].ip;
         csp--;
     }
     LOG_PRINTF(cvm, "Global:\n");
@@ -4584,6 +4674,21 @@ void crustyvm_debugtrace(CrustyVM *cvm, int full) {
     cvm->stage = temp;
 }
 
+int crustyvm_has_entrypoint(CrustyVM *cvm, const char *name) {
+    int procnum;
+
+    procnum = find_procedure(cvm, name);
+    if(procnum == -1) {
+        return(0);
+    }
+
+    if(cvm->proc[procnum].args > 0) {
+        return(0);
+    }
+
+    return(1);
+}
+
 #ifdef CRUSTY_TEST
 void vprintf_cb(void *priv, const char *fmt, ...) {
     va_list ap;
@@ -4619,7 +4724,7 @@ int main(int argc, char **argv) {
     char *program;
     unsigned long len;
     int result;
-    CrustyCallback cb[3] = {
+    CrustyCallback cb[] = {
         {
             .name = "out",
             .length = 1,
@@ -4694,7 +4799,7 @@ int main(int argc, char **argv) {
                        CRUSTY_FLAG_OUTPUT_PASSES
                        /* | CRUSTY_FLAG_TRACE */,
                        0,
-                       cb, 3,
+                       cb, sizeof(cb) / sizeof(CrustyCallback),
                        vprintf_cb, stderr);
     if(cvm == NULL) {
         fprintf(stderr, "Failed to load program.\n");

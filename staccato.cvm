@@ -1,0 +1,83 @@
+include midi.inc
+
+expr channel 0
+expr interval 100
+
+static note
+static cmd
+static chan
+static rateint
+
+macro update_rate
+    ; rescale milliseconds to samples
+    move rateint rate
+    mul rateint interval
+    div rateint 1000
+    ; move debug_print_int rateint
+endmacro update_rate
+
+proc init
+    move note -1
+ret
+
+proc event
+    move cmd data:midi_cmd_idx
+
+    ; check for the timer command
+    cmp cmd midi_cmd_time_clock
+    jumpz timer
+
+    ; unpack command and channel
+    move chan cmd
+    and  cmd  midi_cmd_mask
+    and  chan midi_chan_mask
+    ; don't operate on channels we're not interested in
+    cmp  chan channel
+    jumpn commit
+
+    ; catch note on and don't pass note off
+    cmp cmd midi_cmd_note_on
+    jumpz note_on
+    cmp cmd midi_cmd_note_off
+    jumpz end
+    ; pass anything else though
+    jump commit
+
+    label note_on
+        move debug_print_int note
+        ; if a note is playing, don't process another
+        cmp note -1
+        jumpg end
+
+        ; store note to stop and set up timer to stop the note
+        move note data:midi_note_idx
+        move debug_print_int note
+        update_rate
+        move timer rateint
+        ; let the started note be committed
+
+    label commit
+        move commit commit_pass
+    jump end
+
+    label timer
+        move debug_print_int note
+        ; shouldn't happen but don't try to do something if it does
+        cmp note 0
+        jumpl end
+
+        ; build command
+        move cmd midi_cmd_note_off
+        or   cmd channel
+
+        ; set up note off event
+        move length midi_note_length
+        move data:midi_cmd_idx      cmd
+        move data:midi_note_idx     note
+        move data:midi_velocity_idx 127
+        move commit commit_new
+        ; make it known that a note is no longer playing
+        move note -1
+
+    label end
+ret

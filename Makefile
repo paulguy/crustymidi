@@ -1,6 +1,6 @@
-OBJS   = main.o
-TARGET = midi2midi
-CFLAGS = -Wall -Wextra -D_FILE_OFFSET_BITS=64 -ggdb
+OBJS   = crustyvm.o main.o
+TARGET = crustymidi
+CFLAGS = -Wall -Wextra -Wno-unused-parameter -ggdb
 LDFLAGS = -ljack
 
 $(TARGET): $(OBJS)

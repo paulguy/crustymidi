@@ -1,0 +1,33 @@
+include midi.inc
+
+proc init
+    ; nothing to do
+ret
+
+static cmd
+static note
+proc event
+    ; pass on every event (including root notes)
+    move commit commit_pass
+    move cmd data:midi_cmd_idx
+    and cmd midi_cmd_mask
+    cmp cmd midi_cmd_note_on
+    jumpz note
+    cmp cmd midi_cmd_note_off
+    jumpz note
+    jump end
+
+    label note
+        move length midi_note_length
+        move data:midi_cmd_idx data:midi_cmd_idx
+        move data:midi_velocity_idx data:midi_velocity_idx
+        move note data:midi_note_idx
+        add note 4 ; major third
+        move data:midi_note_idx note
+        move commit commit_new
+        add note 3 ; perfect fifth
+        move data:midi_note_idx note
+        move commit commit_new
+
+    label end
+ret

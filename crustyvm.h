@@ -6,7 +6,9 @@
                                                unsigned int index)
 
 #define CRUSTY_FLAG_DEFAULTS (0)
+#ifdef CRUSTY_TEST
 #define CRUSTY_FLAG_OUTPUT_PASSES (1<<0)
+#endif
 #define CRUSTY_FLAG_TRACE (1<<1)
 
 typedef enum {
@@ -155,4 +157,12 @@ const char *crustyvm_statusstr(CrustyStatus status);
  * long     Print full values of variables.
  */
 void crustyvm_debugtrace(CrustyVM *cvm, int full);
+
+/*
+ * Check to see if a VM has a particular entry point.
+ *
+ * cvm      CrustyVm to check.
+ * name     Name of entry point.
+ */
+int crustyvm_has_entrypoint(CrustyVM *cvm, const char *name);
 

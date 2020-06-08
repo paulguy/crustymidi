@@ -1,0 +1,243 @@
+include midi.inc
+
+expr maxlistlen 10
+expr interval 100 ; milliseconds
+expr channel 0
+
+static notelist     ints maxlistlen
+static velocitylist ints maxlistlen
+static listlen 0
+static rateint
+
+macro update_rate
+    ; rescale milliseconds to samples
+    move rateint rate
+    mul rateint interval
+    div rateint 1000
+    ; move debug_print_int rateint
+endmacro update_rate
+
+macro debug_print uniq
+    move debug_print_int listlen
+    cmp listlen 0
+    jumpz debug_print_end_uniq
+    move i 0
+    label debug_print_loop_uniq
+        move debug_print_int notelist:i
+        add i 1
+        cmp i listlen
+    jumpl debug_print_loop_uniq
+    label debug_print_end_uniq
+endmacro debug_print
+
+proc init
+    update_rate
+    move timer rateint
+ret
+
+static cur 0
+static curnote -1
+static curvelocity 0
+
+proc add_note note velocity
+    local i
+    local j
+    local j1
+
+    ;debug_print a
+
+    ; don't add past the end of the list
+    cmp listlen maxlistlen
+    jumpz end
+
+    move i 0
+    ; if the list is empty, skip everything else and just append
+    cmp listlen 0
+    jumpz skipmove
+
+    ; find the first value larger than the note to insert "sorted"
+    label findloop
+        cmp notelist:i note
+        jumpg endfind
+        add i 1
+        cmp i listlen
+    jumpl findloop
+        ; if the end of the list was reached, just append
+        jump skipmove
+    label endfind
+
+    ; move up larger values
+    move j listlen
+    move j1 listlen
+    sub j 1
+    label moveloop
+        move notelist:j1     notelist:j
+        move velocitylist:j1 velocitylist:j
+        sub j 1
+        sub j1 1
+        cmp j1 i
+    jumpg moveloop
+
+    label skipmove
+
+    ; insert value
+    move notelist:i     note
+    move velocitylist:i velocity
+    add listlen 1
+
+    ; if i > cur, increment cur so it'll play the next expected note
+    cmp i cur
+    jumpg inccur
+    jump end
+    label inccur
+    add cur 1
+
+    label end
+
+    ;debug_print b
+ret
+
+proc remove_note note
+    local i
+    local j
+    local j1
+
+    ;debug_print a
+
+    ; find the note to remove
+    move i 0
+    label findloop
+        cmp notelist:i note
+        jumpz endfind
+        add i 1
+        cmp i listlen
+    jumpl findloop
+        ; didn't find the note, nothing to do
+        jump end
+    label endfind
+
+    ; if note is at the end, no need to move anything
+    add i 1
+    cmp i listlen
+    jumpz skipmove
+    sub i 1
+
+    ; move later values over to overwrite removed value
+    move j i
+    move j1 i
+    add j1 1
+    label moveloop
+        move notelist:j     notelist:j1
+        move velocitylist:j velocitylist:j1
+        add j 1
+        add j1 1
+        cmp j1 listlen
+    jumpl moveloop
+
+    label skipmove
+
+    sub listlen 1
+
+    ; if i < cur, decrease cur so it will play the next note expected to play
+    cmp i cur
+    jumpl deccur
+    jump end
+    label deccur
+    sub cur 1
+
+    label end
+
+    ;debug_print b
+ret
+
+proc timer
+    local cmd
+
+    ; if a note hasn't been playing, don't stop
+    cmp curnote 0
+    jumpl nostop
+
+    ; turn off playing note
+    move cmd midi_cmd_note_off
+    or   cmd channel
+    move length midi_note_length
+    move data:midi_cmd_idx      cmd
+    move data:midi_note_idx     curnote
+    move data:midi_velocity_idx 127
+    move commit commit_new
+
+    move curnote -1
+
+    label nostop
+
+    ; if nothing to do, just end
+    cmp listlen 0
+    jumpz endtimer
+
+    ; if cur >= listlen, wrap it back to 0
+    cmp cur listlen
+    jumpl nocurwrap
+    move cur 0
+    label nocurwrap
+
+    ; update current note
+    move curnote     notelist:cur
+    move curvelocity velocitylist:cur
+
+    ; turn on next note
+    move cmd midi_cmd_note_on
+    or   cmd channel
+    move length midi_note_length
+    move data:midi_cmd_idx      cmd
+    move data:midi_note_idx     curnote
+    move data:midi_velocity_idx curvelocity
+    move commit commit_new
+
+    add cur 1
+
+    label endtimer
+    update_rate ; update rate every time because JACK's sample rate can change
+    move timer rateint
+ret
+
+proc event
+    local cmd
+    local chan
+
+    ; check for the timer command
+    move cmd data:midi_cmd_idx
+    cmp  cmd midi_cmd_time_clock
+    jumpz timer
+
+    ; unpack command and channel
+    move chan cmd
+    and  cmd  midi_cmd_mask
+    and  chan midi_chan_mask
+    ; ignore other channels we're not processing
+    cmp  chan channel
+    jumpn commit
+
+    ; check for the note on/off commands
+    cmp cmd midi_cmd_note_on
+    jumpz note_on
+    cmp cmd midi_cmd_note_off
+    jumpz note_off
+
+    ; pass on every other event
+    label commit
+        move commit commit_pass
+    jump end
+
+    label note_on
+        call add_note data:midi_note_idx data:midi_velocity_idx
+    jump end
+
+    label note_off
+        call remove_note data:midi_note_idx
+    jump end
+
+    label timer
+        call timer
+
+    label end
+ret

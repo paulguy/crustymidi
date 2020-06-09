@@ -1,0 +1,58 @@
+include midi.inc
+
+expr channel 0
+
+static notestates ints 128
+
+proc init
+ret
+
+proc event
+    local cmd
+    local chan
+    local note
+
+    move cmd data:midi_cmd_idx
+
+    move chan cmd
+    and  cmd  midi_cmd_mask
+    and  chan midi_chan_mask
+    ; ignore other channels we're not processing
+    cmp  chan channel
+    jumpn commit
+
+    cmp cmd midi_cmd_note_on
+    jumpz note_on
+    cmp cmd midi_cmd_note_off
+    jumpz end
+    jump commit
+
+    label note_on
+        move note     data:midi_note_idx
+
+        cmp notestates:note 0
+        jumpn turn_off
+
+        ; pass note on
+        move commit commit_pass
+        move notestates:note 1
+        jump end
+        
+        label turn_off
+            move cmd midi_cmd_note_off
+            or   cmd channel
+
+            move length midi_note_length
+            move data:midi_cmd_idx      cmd
+            move data:midi_note_idx     note
+            move data:midi_velocity_idx data:midi_velocity_idx
+            move commit commit_new
+
+            move notestates:note 0
+    jump end
+
+    label commit
+    move commit commit_pass
+
+    label end
+ret

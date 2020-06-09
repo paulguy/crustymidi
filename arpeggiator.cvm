@@ -1,7 +1,7 @@
 include midi.inc
 
 expr maxlistlen 10
-expr interval 100 ; milliseconds
+expr interval 40 ; milliseconds
 expr channel 0
 
 static notelist     ints maxlistlen

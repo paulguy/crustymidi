@@ -46,9 +46,8 @@ keywords:
                                            to/from 8 bits.  Is not terminated.
                                            Consider the expense of calls with
                                            local arrays or strings.
-                                           
 
-  also looks for call and ret
+  also looks for call and ret to determine start and end of procedure scopes.
 
  instructions:
   call <proc> <args> - call a procedure, passing in references.

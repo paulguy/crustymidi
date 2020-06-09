@@ -543,6 +543,8 @@ int main(int argc, char **argv) {
     int i;
 
     /* jack stuff */
+    char *name;
+    char *dot;
     jack_status_t jstatus;
     struct sigaction sa;
     sa.sa_handler = cleanup_and_exit;
@@ -652,7 +654,20 @@ int main(int argc, char **argv) {
 
     fprintf(stderr, "Setting up JACK.\n");
 
-    tctx.jack = jack_client_open(JACK_NAME, JackNoStartServer, &jstatus);
+    dot = strrchr(argv[1], '.');
+    /* prefix + space + filename up to extension + \0 */
+    name = malloc(strlen(JACK_NAME) + 1 + (dot - argv[1]) + 1);
+    if(name == NULL) {
+        fprintf(stderr, "Failed to allocate memory for name.\n");
+        crustyvm_free(tctx.cvm);
+        return(EXIT_FAILURE);
+    }
+    memcpy(name, JACK_NAME, strlen(JACK_NAME));
+    name[strlen(JACK_NAME)] = ' ';
+    memcpy(&(name[strlen(JACK_NAME) + 1]), argv[1], dot - argv[1]);
+    name[strlen(JACK_NAME) + 1 + (dot - argv[1])] = '\0';
+
+    tctx.jack = jack_client_open(name, JackNoStartServer, &jstatus);
     if(tctx.jack == NULL) {
         fprintf(stderr, "Failed to open JACK connection.\n");
         crustyvm_free(tctx.cvm);

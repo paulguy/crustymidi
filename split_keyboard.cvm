@@ -1,0 +1,52 @@
+;crustymidi out:low out:high
+include midi.inc
+
+expr channel 0
+expr crossover 60 ; C4
+expr low_port 0
+expr high_port 1
+
+proc init
+ret
+
+proc event
+    local cmd
+    local chan
+    local note
+
+    move cmd  data:midi_cmd_idx
+    and  cmd  midi_cmd_mask
+    and  chan midi_chan_mask
+    cmp  chan channel
+    jumpn end
+
+    cmp  cmd  midi_cmd_note_on
+    jumpz note
+    cmp  cmd  midi_cmd_note_off
+    jumpz note
+
+    ; since we don't have any other criteria to route an event to one or the
+    ; other, just pass note on and note off and nothing else.
+    jump end
+
+    label note
+        move note data:midi_note_idx
+        or cmd channel
+
+        move length midi_note_length
+        move data:midi_cmd_idx      cmd
+        move data:midi_note_idx     note
+        move data:midi_velocity_idx data:midi_velocity_idx
+
+        ; set it to low port, then check if the value is less than the crossover
+        ; value.  if so, set it to high port.
+        move port low_port
+        cmp note crossover
+        jumpl low
+        move port high_port
+        label low
+
+        move commit commit_new
+
+    label end
+ret

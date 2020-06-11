@@ -13,6 +13,7 @@ crustymidi defines some callbacks:
 Read callbacks:
 length  - get length of incoming event
 data:n  - read data at position n
+port    - the port the event came on
 time    - get timestamp of event.  JACK events are 64 bits so this will only
           return the low 32 bits.
 rate    - the current JACK rate
@@ -20,11 +21,19 @@ rate    - the current JACK rate
 write callbacks:
 length  - set length for new event
 data:n  - write data in to event
+port    - specify which port the data should go out to
 time    - samples from now that event should trigger
 commit  - 0(commit_pass) to pass on the input event as-is,
           1(commit_new) to provide a new event
 timer   - when a value is written to this, an event will be triggered with
           command 0xF8(midi_cmd_time_clock) the given number of samples from now
+
+A file may start with a string ";crustymidi " (treated as a comment to the
+interpreter) where some space separated parameters may be defined.  For now you
+can use it to specify input and output ports.  These can be specified by
+"in:name" and "out:name" to specify input and output ports with a specified
+name.  This is what will appear to JACK.  To the script, they will just be
+numbered with each set starting from 0.
 
 for more information, check the example files, and knowledge of MIDI protocol
 is necessary.

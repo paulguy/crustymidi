@@ -12,18 +12,25 @@
 
 #define MAX_BUFFER_SIZE (8192) /* should be plenty, I guess */
 #define MAX_MIDI_EVENTS (1000) /* should also be plenty, maybe */
+#define MAX_PORTS       (32)
 
 /* pick an event unlikely to come from JACK to use for requested timer events
    and just use the MIDI timing clock event I guess */
 #define UNLIKELY_JACK_EVENT (0xF8)
 
 const char JACK_NAME[] = "crustymidi";
+const char META_PREFIX[] = ";crustymidi ";
+const char INPORT_PREFIX[] = "in:";
+const char OUTPORT_PREFIX[] = "out:";
+char DEFAULT_INPORT_NAME[] = "in";
+char DEFAULT_OUTPORT_NAME[] = "out";
 
 const unsigned char TIMER_EVENT[] = { UNLIKELY_JACK_EVENT };
 
 typedef struct midi_event {
     struct midi_event *next;
 
+    unsigned int port;
     uint64_t time;
     unsigned int size;
     unsigned char buffer[MAX_BUFFER_SIZE];
@@ -43,7 +50,10 @@ typedef struct {
 typedef struct {
     int good;
 
-    jack_port_t *in, *out;
+    unsigned int inports, outports;
+
+    jack_port_t *in[MAX_PORTS];
+    jack_port_t *out[MAX_PORTS];
 
     unsigned int rate, newrate;
 
@@ -55,6 +65,7 @@ typedef struct {
     CrustyVM *cvm;
     midi_event *curEv;
 
+    unsigned int outPort;
     unsigned int outTime;
     unsigned int outLen;
     unsigned char outBuff[MAX_BUFFER_SIZE];
@@ -83,6 +94,7 @@ midi_event *next_free_event(EventList *ev) {
 }
 
 int schedule_event(EventList *ev,
+                   unsigned int port,
                    uint64_t time,
                    size_t size,
                    const unsigned char * buffer) {
@@ -119,6 +131,7 @@ int schedule_event(EventList *ev,
             return(-1);
         }
 
+        newEvent->port = port;
         newEvent->time = time;
         newEvent->size = size;
         newEvent->sysex = ev->sysex;
@@ -173,6 +186,7 @@ int schedule_event(EventList *ev,
             return(-1);
         }
         newEvent->next = ev->head;
+        newEvent->port = port;
         newEvent->time = time;
         newEvent->size = size;
         newEvent->sysex = ev->sysex;
@@ -203,6 +217,7 @@ int schedule_event(EventList *ev,
             return(-1);
         }
         event->next = NULL;
+        event->port = port;
         event->time = time;
         event->size = size;
         event->sysex = 0;
@@ -229,6 +244,7 @@ int schedule_event(EventList *ev,
             } else {
                 lastEvent->next = newEvent;
             }
+            newEvent->port = port;
             newEvent->time = time;
             newEvent->size = size;
             newEvent->sysex = 0;
@@ -243,6 +259,7 @@ int schedule_event(EventList *ev,
     /* none found, so just schedule it as the last event */
     lastEvent->next = next_free_event(ev);
     event = lastEvent->next;
+    event->port = port;
     event->time = time;
     event->size = size;
     event->sysex = 0;
@@ -265,8 +282,9 @@ int process(jack_nframes_t nframes, void *arg) {
     jack_midi_event_t jackEvent;
     midi_event *event;
 
-    char *in, *out;
-    uint32_t i;
+    char *in;
+    char *out[MAX_PORTS];
+    uint32_t i, j;
 
     /* update output events in case there's a new rate */
     if(tctx.rate != tctx.newrate) {
@@ -285,20 +303,23 @@ int process(jack_nframes_t nframes, void *arg) {
         tctx.rate = tctx.newrate;
     }
 
-    in = jack_port_get_buffer(tctx.in, nframes);
+    for(j = 0; j < tctx.inports; j++) {
+        in = jack_port_get_buffer(tctx.in[j], nframes);
 
-    for(i = 0;; i++) {
-        if(jack_midi_event_get(&jackEvent, in, i)) {
-            break;
-        }
+        for(i = 0;; i++) {
+            if(jack_midi_event_get(&jackEvent, in, i)) {
+                break;
+            }
 
-        if(schedule_event(&(tctx.inEv),
-                          tctx.runningTime + jackEvent.time,
-                          jackEvent.size,
-                          jackEvent.buffer)) {
-            printf("Failed to schedule event.\n");
-            tctx.good = 0;
-            return(-1);
+            if(schedule_event(&(tctx.inEv),
+                              j,
+                              tctx.runningTime + jackEvent.time,
+                              jackEvent.size,
+                              jackEvent.buffer)) {
+                printf("Failed to schedule event.\n");
+                tctx.good = 0;
+                return(-1);
+            }
         }
     }
 
@@ -314,6 +335,7 @@ int process(jack_nframes_t nframes, void *arg) {
             break;
         }
 
+        tctx.outPort = 0;
         tctx.outTime = 0;
         tctx.outLen = 0;
         if(crustyvm_run(tctx.cvm, "event") < 0) {
@@ -327,8 +349,10 @@ int process(jack_nframes_t nframes, void *arg) {
         next_event_done(&(tctx.inEv));
     }
 
-    out = jack_port_get_buffer(tctx.out, nframes);
-    jack_midi_clear_buffer(out);
+    for(i = 0; i < tctx.outports; i++) {
+        out[i] = jack_port_get_buffer(tctx.out[i], nframes);
+        jack_midi_clear_buffer(out[i]);
+    }
 
 /*
     if(get_next_event(&(tctx.outEv)) != NULL) {
@@ -351,7 +375,7 @@ int process(jack_nframes_t nframes, void *arg) {
         }
         printf("\n");
 */
-        if(jack_midi_event_write(out,
+        if(jack_midi_event_write(out[event->port],
                                  event->time - tctx.runningTime,
                                  event->buffer,
                                  event->size)) {
@@ -420,6 +444,12 @@ int gettime(void *priv, void *val, unsigned int index) {
     return(0);
 }
 
+int getport(void *priv, void *val, unsigned int index) {
+    *(int *)val = tctx.curEv->port;
+
+    return(0);
+}
+
 int getrate(void *priv, void *val, unsigned int index) {
     *(int *)val = tctx.rate;
 
@@ -466,6 +496,19 @@ int settime(void *priv, void *val, unsigned int index) {
     return(0);
 }
 
+int setport(void *priv, void *val, unsigned int index) {
+    int intval = *(int *)val;
+
+    /* can't schedule for a time in the past */
+    if(intval < 0 || (unsigned int)intval > tctx.outports) {
+        return(-1);
+    }
+
+    tctx.outPort = intval;
+
+    return(0);
+}
+
 int commit(void *priv, void *val, unsigned int index) {
     /* write nonzero to pass value */
     if(*(int *)val == 0) {
@@ -474,6 +517,10 @@ int commit(void *priv, void *val, unsigned int index) {
         }
 
         if(schedule_event(&(tctx.outEv),
+                          tctx.outPort, /* pass by port specified by the program
+                                           because the original port it came in
+                                           on is irrelevant to the output ports.
+                                         */
                           tctx.curEv->time,
                           tctx.curEv->size,
                           tctx.curEv->buffer)) {
@@ -481,6 +528,7 @@ int commit(void *priv, void *val, unsigned int index) {
         }
     } else {
         if(schedule_event(&(tctx.outEv),
+                          tctx.outPort,
                           tctx.curEv->time + tctx.outTime,
                           tctx.outLen,
                           tctx.outBuff)) {
@@ -501,6 +549,7 @@ int timer(void *priv, void *val, unsigned int index) {
     /* add it to the input event queue */
     if(tctx.curEv == NULL) { /* init */
         if(schedule_event(&(tctx.inEv),
+                          0,
                           intval,
                           1,
                           TIMER_EVENT)) {
@@ -508,6 +557,7 @@ int timer(void *priv, void *val, unsigned int index) {
         }
     } else {
         if(schedule_event(&(tctx.inEv),
+                          0,
                           tctx.curEv->time + intval,
                           1,
                           TIMER_EVENT)) {
@@ -538,9 +588,123 @@ void vprintf_cb(void *priv, const char *fmt, ...) {
     vfprintf(out, fmt, ap);
 }
 
+int update_settings(char *program, unsigned long len,
+                    unsigned int *inports, unsigned int *outports,
+                    char **inportnames, char **outportnames) {
+    unsigned long i, j;
+    unsigned long linelen;
+
+    *inports = 0;
+    *outports = 0;
+
+    if(len > sizeof(META_PREFIX) - 1 &&
+       strncmp(program, META_PREFIX, sizeof(META_PREFIX) - 1) == 0) {
+        /* find end of line */
+        for(i = 0; i < len; i++) {
+            if(program[i] == '\r' || program[i] == '\n') {
+                break;
+            }
+        }
+        linelen = i;
+
+        for(i = sizeof(META_PREFIX) - 1; i < linelen; i++) {
+            if(linelen - i >= sizeof(INPORT_PREFIX) - 1 &&
+               strncmp(&(program[i]),
+                       INPORT_PREFIX,
+                       sizeof(INPORT_PREFIX) - 1) == 0) {
+                if(*inports == MAX_PORTS) {
+                    fprintf(stderr, "Greater than %u input ports defined.\n",
+                            MAX_PORTS);
+                    return(-1);
+                }
+                i += sizeof(INPORT_PREFIX) - 1;
+                for(j = i; j < linelen; j++) {
+                    if(program[j] == ' ' || program[j] == '\t') {
+                        break;
+                    }
+                }
+
+                inportnames[*inports] = malloc(j - i + 1);
+                if(inportnames[*inports] == NULL) {
+                    fprintf(stderr, "Failed to allocate memory for inport name.\n");
+                    return(-1);
+                }
+                memcpy(inportnames[*inports], &(program[i]), j - i);
+                inportnames[*inports][j - i] = '\0';
+                
+                (*inports)++;
+                i = j;
+            } else if(linelen - i >= sizeof(OUTPORT_PREFIX) - 1 &&
+                      strncmp(&(program[i]),
+                              OUTPORT_PREFIX,
+                              sizeof(OUTPORT_PREFIX) - 1) == 0) {
+                if(*outports == MAX_PORTS) {
+                    fprintf(stderr, "Greater than %u input ports defined.\n",
+                            MAX_PORTS);
+                    return(-1);
+                }
+                i += sizeof(OUTPORT_PREFIX) - 1;
+                for(j = i; j < linelen; j++) {
+                    if(program[j] == ' ' || program[j] == '\t') {
+                        break;
+                    }
+                }
+
+                outportnames[*outports] = malloc(j - i + 1);
+                if(outportnames[*outports] == NULL) {
+                    fprintf(stderr, "Failed to allocate memory for inport name.\n");
+                    return(-1);
+                }
+                memcpy(outportnames[*outports], &(program[i]), j - i);
+                outportnames[*outports][j - i] = '\0';
+                
+                (*outports)++;
+                i = j;
+            } else {
+                for(j = i; j < linelen; j++) {
+                    if(program[j] == ' ' || program[j] == '\t') {
+                        break;
+                    }
+                }
+                i = j;
+            }
+        }
+    }
+
+    if(*inports == 0) {
+        *inports = 1;
+        inportnames[0] = DEFAULT_INPORT_NAME;
+    }
+    if(*outports == 0) {
+        *outports = 1;
+        outportnames[0] = DEFAULT_OUTPORT_NAME;
+    }
+
+    return(0);
+}
+
+void free_portnames(unsigned int inports, unsigned int outports,
+                    char **inportnames, char **outportnames) {
+    unsigned int i;
+    for(i = 0; i < inports; i++) {
+        /* don't try to free static name string */
+        if(inportnames[i] != DEFAULT_INPORT_NAME) {
+            free(inportnames[i]);
+        }
+    }
+    for(i = 0; i < outports; i++) {
+        /* same */
+        if(outportnames[i] != DEFAULT_OUTPORT_NAME) {
+            free(outportnames[i]);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     /* general stuff */
-    int i;
+    unsigned int i;
+    char *inportnames[MAX_PORTS];
+    char *outportnames[MAX_PORTS];
 
     /* jack stuff */
     char *name;
@@ -575,6 +739,11 @@ int main(int argc, char **argv) {
             .name = "time", .length = 1, .type = CRUSTY_TYPE_INT,
             .read = gettime,  .readpriv  = NULL,
             .write = settime, .writepriv = NULL
+        },
+        {
+            .name = "port", .length = 1, .type = CRUSTY_TYPE_INT,
+            .read = getport,  .readpriv  = NULL,
+            .write = setport, .writepriv = NULL
         },
         {
             .name = "rate", .length = 1, .type = CRUSTY_TYPE_INT,
@@ -622,10 +791,20 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Failed to read file.\n");
         fclose(in);
         free(program);
+        exit(EXIT_FAILURE);
     }
 
     fclose(in);
     in = NULL;
+
+    if(update_settings(program,         len,
+                       &(tctx.inports), &(tctx.outports),
+                       inportnames,     outportnames) < 0) {
+        free_portnames(tctx.inports, tctx.outports,
+                       inportnames,  outportnames);
+        free(program);
+        exit(EXIT_FAILURE);
+    }
 
     tctx.cvm = crustyvm_new(argv[1], program, len,
                             CRUSTY_FLAG_DEFAULTS
@@ -636,6 +815,8 @@ int main(int argc, char **argv) {
     free(program);
     if(tctx.cvm == NULL) {
         fprintf(stderr, "Failed to load program.\n");
+        free_portnames(tctx.inports, tctx.outports,
+                       inportnames,  outportnames);
         exit(EXIT_FAILURE);
     }
     fprintf(stderr, "Program loaded.\n");
@@ -643,12 +824,16 @@ int main(int argc, char **argv) {
     if(!crustyvm_has_entrypoint(tctx.cvm, "init")) {
         fprintf(stderr, "Program has no valid entrypoint for 'init'.\n");
         crustyvm_free(tctx.cvm);
+        free_portnames(tctx.inports, tctx.outports,
+                       inportnames,  outportnames);
         exit(EXIT_FAILURE);
     }
 
     if(!crustyvm_has_entrypoint(tctx.cvm, "event")) {
         fprintf(stderr, "Program has no valid entrypoint for 'event'.\n");
         crustyvm_free(tctx.cvm);
+        free_portnames(tctx.inports, tctx.outports,
+                       inportnames,  outportnames);
         exit(EXIT_FAILURE);
     }
 
@@ -660,6 +845,8 @@ int main(int argc, char **argv) {
     if(name == NULL) {
         fprintf(stderr, "Failed to allocate memory for name.\n");
         crustyvm_free(tctx.cvm);
+        free_portnames(tctx.inports, tctx.outports,
+                       inportnames,  outportnames);
         return(EXIT_FAILURE);
     }
     memcpy(name, JACK_NAME, strlen(JACK_NAME));
@@ -671,6 +858,8 @@ int main(int argc, char **argv) {
     if(tctx.jack == NULL) {
         fprintf(stderr, "Failed to open JACK connection.\n");
         crustyvm_free(tctx.cvm);
+        free_portnames(tctx.inports, tctx.outports,
+                       inportnames,  outportnames);
         return(EXIT_FAILURE);
     }
     if(sigaction(SIGHUP, &sa, NULL) != 0 ||
@@ -680,28 +869,40 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "JACK connection opened.\n");
 
-    tctx.in = jack_port_register(tctx.jack,
-                                 "in",
-                                 JACK_DEFAULT_MIDI_TYPE,
-                                 JackPortIsInput,
-                                 0);
-    if(tctx.in == NULL) {
-        fprintf(stderr, "Failed to register in port.\n");
-        jack_close();
-        crustyvm_free(tctx.cvm);
-        return(EXIT_FAILURE);
+    for(i = 0; i < tctx.inports; i++) {
+        tctx.in[i] = jack_port_register(tctx.jack,
+                                        inportnames[i],
+                                        JACK_DEFAULT_MIDI_TYPE,
+                                        JackPortIsInput,
+                                        0);
+        if(tctx.in[i] == NULL) {
+            fprintf(stderr, "Failed to register in port %s.\n", inportnames[i]);
+            cleanup();
+            free_portnames(tctx.inports, tctx.outports,
+                           inportnames,  outportnames);
+            return(EXIT_FAILURE);
+        }
     }
 
-    tctx.out = jack_port_register(tctx.jack,
-                                  "out",
-                                  JACK_DEFAULT_MIDI_TYPE,
-                                  JackPortIsOutput,
-                                  0);
-    if(tctx.out == NULL) {
-        fprintf(stderr, "Failed to register out port.\n");
-        cleanup();
-        return(EXIT_FAILURE);
+    for(i = 0; i < tctx.outports; i++) {
+        tctx.out[i] = jack_port_register(tctx.jack,
+                                         outportnames[i],
+                                         JACK_DEFAULT_MIDI_TYPE,
+                                         JackPortIsOutput,
+                                         0);
+        if(tctx.out[i] == NULL) {
+            fprintf(stderr, "Failed to register out port %s.\n", outportnames[i]);
+            cleanup();
+            free_portnames(tctx.inports, tctx.outports,
+                           inportnames,  outportnames);
+            return(EXIT_FAILURE);
+        }
     }
+
+    /* done with these, so clean them up */
+    free_portnames(tctx.inports, tctx.outports,
+                   inportnames,  outportnames);
+
     for(i = 0; i < MAX_MIDI_EVENTS; i++) {
         tctx.inEv.event[i].size = 0;
         tctx.outEv.event[i].size = 0;

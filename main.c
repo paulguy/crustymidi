@@ -948,7 +948,7 @@ int main(int argc, char **argv) {
     /* wait */
     tctx.good = 1;
     for(;;) {
-        usleep(1000);
+        usleep(1000000);
         if(tctx.good == 0) {
             break;
         }

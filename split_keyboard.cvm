@@ -3,8 +3,14 @@ include midi.inc
 
 expr channel 0
 expr crossover 60 ; C4
+expr low_transpose -12
+expr high_transpose 0
 expr low_port 0
 expr high_port 1
+
+macro transpose amount
+    add note amount
+endmacro transpose
 
 proc init
 ret
@@ -33,18 +39,21 @@ proc event
         move note data:midi_note_idx
         or cmd channel
 
-        move length midi_note_length
-        move data:midi_cmd_idx      cmd
-        move data:midi_note_idx     note
-        move data:midi_velocity_idx data:midi_velocity_idx
-
-        ; set it to low port, then check if the value is less than the crossover
-        ; value.  if so, set it to high port.
         move port low_port
         cmp note crossover
         jumpl low
         move port high_port
+        if high_transpose transpose high_transpose
+        jump high
         label low
+        move port low_port
+        if low_transpose transpose low_transpose
+        label high
+
+        move length midi_note_length
+        move data:midi_cmd_idx      cmd
+        move data:midi_note_idx     note
+        move data:midi_velocity_idx data:midi_velocity_idx
 
         move commit commit_new
 

@@ -30,35 +30,6 @@
 #define LOG_PRINTF_BARE(CVM, FMT, ...) \
     (CVM)->log_cb((CVM)->log_priv, FMT, ##__VA_ARGS__)
 
-#define CRUSTY_MIN(X, Y) ((X < Y) ? (X) : (Y))
-#define ISDIGIT(X) ((X) == '0' || \
-                    (X) == '1' || \
-                    (X) == '2' || \
-                    (X) == '3' || \
-                    (X) == '4' || \
-                    (X) == '5' || \
-                    (X) == '6' || \
-                    (X) == '7' || \
-                    (X) == '8' || \
-                    (X) == '9')
-
-#define ISHEXDIGIT(X) ((X) == '0' || \
-                       (X) == '1' || \
-                       (X) == '2' || \
-                       (X) == '3' || \
-                       (X) == '4' || \
-                       (X) == '5' || \
-                       (X) == '6' || \
-                       (X) == '7' || \
-                       (X) == '8' || \
-                       (X) == '9' || \
-                       (X) == 'a' || (X) == 'A' || \
-                       (X) == 'b' || (X) == 'B' || \
-                       (X) == 'c' || (X) == 'C' || \
-                       (X) == 'd' || (X) == 'D' || \
-                       (X) == 'e' || (X) == 'E' || \
-                       (X) == 'f' || (X) == 'F')
-
 typedef struct {
     unsigned int ip;
     unsigned int proc;
@@ -979,7 +950,8 @@ static CrustyExpr *add_expr(CrustyVM *cvm,
                             CrustyExprOp op,
                             int number,
                             CrustyExpr *buffer,
-                            int *len) {
+                            int *len,
+                            CrustyExpr **new) {
     CrustyExpr *expr;
     expr = realloc(buffer, sizeof(CrustyExpr) * (*len + 1));
     if(expr == NULL) {
@@ -987,14 +959,41 @@ static CrustyExpr *add_expr(CrustyVM *cvm,
         return(NULL);
     }
 
-    expr[*len].op = op;
-    expr[*len].number = number;
+    *new = &(expr[*len]);
+    (*new)->op = op;
+    (*new)->number = number;
     (*len)++;
 
     return(expr);
 }
 
 #define ISJUNK(X) ((X) == ' ' || (X) == '\t')
+#define PRINT_EXPR(EXPR) \
+    switch((EXPR).op) { \
+        case CRUSTY_EXPR_NUMBER: \
+            fprintf(stderr, "%d ", (EXPR).number); \
+            break; \
+        case CRUSTY_EXPR_LPAREN: \
+            fprintf(stderr, "( "); \
+            break; \
+        case CRUSTY_EXPR_RPAREN: \
+            fprintf(stderr, ") "); \
+            break; \
+        case CRUSTY_EXPR_PLUS: \
+            fprintf(stderr, "+ "); \
+            break; \
+        case CRUSTY_EXPR_MINUS: \
+            fprintf(stderr, "- "); \
+            break; \
+        case CRUSTY_EXPR_MULTIPLY: \
+            fprintf(stderr, "* "); \
+            break; \
+        case CRUSTY_EXPR_DIVIDE: \
+            fprintf(stderr, "/ "); \
+            break; \
+        default: \
+            fprintf(stderr, "? "); \
+    }
 
 /* this is all awful and probably a horrible, inefficient way to do this but I don't know a better way */
 static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
@@ -1002,79 +1001,86 @@ static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
     char *tempmem;
     int exprmem = 0;
     CrustyExpr *temp;
+    CrustyExpr *new = NULL;
     int parens = 0;
-    int numstart = -1;
     int valsize;
-    int ishex = 0;
+
+    char *end;
+    long num;
 
     int i;
     int exprlen = strlen(expression);
 
     for(i = 0; i < exprlen; i++) {
-        if(numstart < 0) {
-            if(ISJUNK(expression[i])) {
-                continue;
-            } else if(expression[i] == '(') {
-                temp = add_expr(cvm, CRUSTY_EXPR_LPAREN, 0, expr, &exprmem);
+        if(ISJUNK(expression[i])) {
+            continue;
+        } else if(expression[i] == '(') {
+            temp = add_expr(cvm, CRUSTY_EXPR_LPAREN, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+            parens++;
+        } else if(expression[i] == ')') {
+            temp = add_expr(cvm, CRUSTY_EXPR_RPAREN, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+            parens--;
+        } else if(expression[i] == '+' &&
+                  new != NULL &&
+                  (new->op == CRUSTY_EXPR_NUMBER ||
+                   new->op == CRUSTY_EXPR_RPAREN)) {
+            /* Only assume we want to add a + or - if we're following a
+               point where it'd be clearly valid to do so, otherwise one
+               wouldn't be able to for example add or subtract a negative
+               number, because the evaluation of something like 2 - -2 would
+               become 2 subtract subtract 2 which can't work.  This will
+               allow it to be 2 subtract -2 because this'll fall through and
+               the -2 will be evaluated by strtol. */
+            temp = add_expr(cvm, CRUSTY_EXPR_PLUS, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+        } else if(expression[i] == '-' &&
+                  new != NULL &&
+                  (new->op == CRUSTY_EXPR_NUMBER ||
+                   new->op == CRUSTY_EXPR_RPAREN)) {
+            temp = add_expr(cvm, CRUSTY_EXPR_MINUS, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+        } else if(expression[i] == '*') {
+            temp = add_expr(cvm, CRUSTY_EXPR_MULTIPLY, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+        } else if(expression[i] == '/') {
+            temp = add_expr(cvm, CRUSTY_EXPR_DIVIDE, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+        } else {
+            num = strtol(&(expression[i]), &end, 0);
+            if(&(expression[i]) != end) {
+                temp = add_expr(cvm, CRUSTY_EXPR_NUMBER, num, expr, &exprmem, &new);
                 if(temp == NULL) {
                     goto error;
                 }
                 expr = temp;
-                parens++;
-            } else if(expression[i] == ')') {
-                temp = add_expr(cvm, CRUSTY_EXPR_RPAREN, 0, expr, &exprmem);
-                if(temp == NULL) {
-                    goto error;
-                }
-                expr = temp;
-                parens--;
-            } else if(expression[i] == '+') {
-                if(i == exprlen - 1) {
-                    LOG_PRINTF_LINE(cvm, "Addition/positive sign followed by nothing.\n");
-                    goto error;
-                }
-                if(ISDIGIT(expression[i + 1])) {
-                    numstart = i;
-                    continue;
-                }
-                temp = add_expr(cvm, CRUSTY_EXPR_PLUS, 0, expr, &exprmem);
-                if(temp == NULL) {
-                    goto error;
-                }
-                expr = temp;
-            } else if(expression[i] == '-') {
-                if(i == exprlen - 1) {
-                    LOG_PRINTF_LINE(cvm, "Subtraction/negative sign followed by nothing.\n");
-                    goto error;
-                }
-                if(ISDIGIT(expression[i + 1])) {
-                    numstart = i;
-                    continue;
-                }
-                temp = add_expr(cvm, CRUSTY_EXPR_MINUS, 0, expr, &exprmem);
-                if(temp == NULL) {
-                    goto error;
-                }
-                expr = temp;
-            } else if(expression[i] == '*') {
-                temp = add_expr(cvm, CRUSTY_EXPR_MULTIPLY, 0, expr, &exprmem);
-                if(temp == NULL) {
-                    goto error;
-                }
-                expr = temp;
-            } else if(expression[i] == '/') {
-                temp = add_expr(cvm, CRUSTY_EXPR_DIVIDE, 0, expr, &exprmem);
-                if(temp == NULL) {
-                    goto error;
-                }
-                expr = temp;
-            } else if(ISDIGIT(expression[i])) {
-                numstart = i;
+
+                i += (int)(end - &(expression[i]) - 1);
             } else {
                 /* insert a 0 for an undefined variable or whatever the user
                    might have put in that can't be interpreted as anything. This
                    will make user errors harder to find but whichever. */
-                temp = add_expr(cvm, CRUSTY_EXPR_NUMBER, 0, expr, &exprmem);
+                temp = add_expr(cvm, CRUSTY_EXPR_NUMBER, 0, expr, &exprmem, &new);
+
                 if(temp == NULL) {
                     goto error;
                 }
@@ -1087,71 +1093,14 @@ static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
                     i++;
                 }
             }
-        } else {
-            if(!ISDIGIT(expression[i])) {
-                /* check if hexadecimal */
-                if(ishex == 1) {
-                    if(ISHEXDIGIT(expression[i])) {
-                        continue;
-                    }
-                } else {
-                    if(expression[i] == 'x') {
-                        if(i != numstart + 1) {
-                            LOG_PRINTF_LINE(cvm,
-                                "x in hexadecimal number must be second character.\n");
-                            goto error;
-                        }
-                        if(expression[numstart] != '0') {
-                            LOG_PRINTF_LINE(cvm,
-                                "x in hexadecimal number must follow a 0.\n");
-                            goto error;
-                        }
-                        if(i == exprlen - 1) {
-                            LOG_PRINTF_LINE(cvm,
-                                "x in hexadecimal number found at end of expression.\n");
-                            goto error;
-                        }
-                        if(!ISHEXDIGIT(expression[i+1])) {
-                            LOG_PRINTF_LINE(cvm,
-                                "x in hexadecimal number must be immediately "
-                                "followed by digits.\n");
-                            goto error;
-                        }
-                        ishex = 1;
-                        continue;
-                    }
-                }
-
-                temp = add_expr(cvm, CRUSTY_EXPR_NUMBER,
-                                strtol(&(expression[numstart]), NULL, 0),
-                                expr, &exprmem);
-                if(temp == NULL) {
-                    goto error;
-                }
-                expr = temp;
-                numstart = -1;
-                ishex = 0;
-                i--;
-            }
         }
+
+        /* PRINT_EXPR(*new) */
     }
+    /* fprintf(stderr, "\n"); */
     if(parens != 0) {
         LOG_PRINTF_LINE(cvm, "Unmatched parentheses.\n");
         goto error;
-    }
-
-    /* in case a number is found at the end */
-    if(numstart >= 0) {
-        /* no need to store a temp character because the end of the expression
-           is already NULL terminated */
-        temp = add_expr(cvm, CRUSTY_EXPR_NUMBER,
-                        strtol(&(expression[numstart]), NULL, 0),
-                        expr, &exprmem);
-        if(temp == NULL) {
-            goto error;
-        }
-        expr = temp;
-        numstart = -1;
     }
 
     if(exprmem == 0) {
@@ -1208,7 +1157,6 @@ error:
 }
 
 #undef ISJUNK
-#undef ISDIGIT
 
 static int preprocess(CrustyVM *cvm) {
     unsigned int i, j;
@@ -1249,7 +1197,10 @@ static int preprocess(CrustyVM *cvm) {
         /* replace any tokens with tokens containing any possible macro
            replacement values */
         for(i = 0; i < active.tokencount; i++) {
-            if(macrostackptr >= 0 && macrostack[macrostackptr]->argcount > 0) {
+            /* don't mutate the endmacro line while processing a macro, since it
+               could replace substrings causing the macro to never end */
+            if((macrostackptr >= 0 && macrostack[macrostackptr]->argcount > 0) &&
+               strcmp(cvm->line[cvm->logline].token[0], "endmacro") != 0) {
                 for(j = 0; j < macrostack[macrostackptr]->argcount; j++) {
                     /* function will just pass back the token passed to
                        it in the case there's nothing to be done,

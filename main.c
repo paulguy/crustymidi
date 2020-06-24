@@ -700,6 +700,7 @@ void free_portnames(unsigned int inports, unsigned int outports,
     }
 }
 
+/* TODO: take in defined variables on the command line and wire up passing them in */
 int main(int argc, char **argv) {
     /* general stuff */
     unsigned int i;

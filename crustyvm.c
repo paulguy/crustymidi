@@ -10,7 +10,6 @@
 
 #include "crustyvm.h"
 
-#define MAX_TOKENS (10)
 #define MAX_SYMBOL_LEN (32)
 #define MACRO_STACK_SIZE (32)
 #define MAX_PASSES (16)
@@ -43,10 +42,11 @@ typedef struct {
 } CrustyStackArg;
 
 typedef struct {
-    int offset[MAX_TOKENS];
-    char *token[MAX_TOKENS];
+    unsigned long *offset;
+    char **token;
     unsigned int tokencount;
 
+    long moduleOffset;
     const char *module;
     unsigned int line;
 
@@ -56,6 +56,7 @@ typedef struct {
 typedef struct CrustyProcedure_s CrustyProcedure;
 
 typedef struct {
+    long nameOffset;
     const char *name;
     CrustyType type;
     struct CrustyProcedure_s *proc;
@@ -80,11 +81,13 @@ typedef struct {
 } CrustyVariable;
 
 typedef struct {
+    long nameOffset;
     const char *name;
     unsigned int line;
 } CrustyLabel;
 
 typedef struct CrustyProcedure_s {
+    long nameOffset;
     const char *name;
     unsigned int start;
     unsigned int length;
@@ -163,16 +166,11 @@ typedef struct CrustyVM_s {
     unsigned int logline;
     const char *stage;
 
-    char *program;
-    unsigned int proglen;
-
     CrustyLine *line;
     unsigned int lines;
 
-    /* for if a macro substring replacement ends up larger and needs additional
-       memory to store the new, constructed string */
-    char **extramem;
-    unsigned int extramemlen;
+    char *tokenmem;
+    int tokenmemlen;
 
     CrustyVariable *var;
     unsigned int vars;
@@ -203,13 +201,11 @@ typedef struct CrustyVM_s {
 
 /* compile-time stuff */
 
-#define MAX_MACRO_ARGS (MAX_TOKENS - 1)
-
 typedef struct {
-    const char *name;
+    long nameOffset;
     unsigned int start;
 
-    char *arg[MAX_MACRO_ARGS];
+    long *argOffset;
     unsigned int argcount;
 } CrustyMacro;
 
@@ -255,12 +251,10 @@ static CrustyVM *init() {
     cvm->log_cb = NULL;
     cvm->log_priv = NULL;
     cvm->stage = NULL;
-    cvm->program = NULL;
-    cvm->proglen = 0;
     cvm->line = NULL;
     cvm->lines = 0;
-    cvm->extramem = NULL;
-    cvm->extramemlen = 0;
+    cvm->tokenmem = NULL;
+    cvm->tokenmemlen = 0;
     cvm->var = NULL;
     cvm->vars = 0;
     cvm->proc = NULL;
@@ -276,18 +270,19 @@ void crustyvm_free(CrustyVM *cvm) {
     unsigned int i;
 
     if(cvm->line != NULL) {
+        for(i = 0; i < cvm->lines; i++) {
+            if(cvm->line[i].offset != NULL) {
+                free(cvm->line[i].offset);
+            }
+            if(cvm->line[i].token != NULL) {
+                free(cvm->line[i].token);
+            }
+        }
         free(cvm->line);
     }
 
-    if(cvm->program != NULL) {
-        free(cvm->program);
-    }
-
-    if(cvm->extramem != NULL) {
-        for(i = 0; i < cvm->extramemlen; i++) {
-            free(cvm->extramem[i]);
-        }
-        free(cvm->extramem);
+    if(cvm->tokenmem != NULL) {
+        free(cvm->tokenmem);
     }
 
     if(cvm->proc != NULL) {
@@ -331,64 +326,96 @@ void crustyvm_free(CrustyVM *cvm) {
     free(cvm);
 }
 
-static int add_extra_mem(CrustyVM *cvm, char *ptr) {
-    /* pointers passed in to this function to be added to the list should be
-       heap allocated buffers which will be freed */
-    char **temp;
+static long add_token(CrustyVM *cvm,
+                     const char *token,
+                     unsigned long len,
+                     int quoted) {
+    char *temp;
+    unsigned long oldlen;
+    unsigned long srcpos, destpos;
 
-    temp = realloc(cvm->extramem, sizeof(char **) * (cvm->extramemlen + 1));
+    /* existing length + token + null terminator.  Resulting quoted strings can
+       only ever be equal to or shorter than the input length. */
+    temp = realloc(cvm->tokenmem, cvm->tokenmemlen + len + 1);
     if(temp == NULL) {
         return(-1);
     }
-    cvm->extramem = temp;
-    cvm->extramem[cvm->extramemlen] = ptr;
-    cvm->extramemlen++;
+    cvm->tokenmem = temp;
+    temp = &(cvm->tokenmem[cvm->tokenmemlen]);
 
-    return(0);
-}
-
-#define INSTRUCTION_COUNT (24)
-
-static int valid_instruction(const char *name) {
-    int i;
-
-    const char *INSTRUCTION_LIST[] = {
-        "stack",
-        "proc",
-        "export",
-        "ret",
-        "label",
-        "static",
-        "local",
-        "move",
-        "add",
-        "sub",
-        "mul",
-        "div",
-        "and",
-        "or",
-        "xor",
-        "shl",
-        "shr",
-        "cmp",
-        "call",
-        "jump",
-        "jumpn",
-        "jumpz",
-        "jumpl",
-        "jumpg"
-    };  
-
-    for(i = 0; i < INSTRUCTION_COUNT; i++) {
-        if(strcmp(name, INSTRUCTION_LIST[i]) == 0) {
-            return(1);
+    if(token == NULL) { /* just allocate the space and return it */
+        temp[len] = '\0';
+        oldlen = cvm->tokenmemlen;
+        cvm->tokenmemlen += len + 1;
+    } else {
+        if(quoted) { /* much slower method and uncommonly used */
+            srcpos = 0;
+            destpos = 0;
+            for(srcpos = 0; srcpos < len; srcpos++) {
+                if(token[srcpos] == '\\') {
+                    if(srcpos + 1 == len) {
+                        LOG_PRINTF(cvm, "Lone escape char at end of string.\n");
+                        return(-1);
+                    }
+                    srcpos++;
+                    switch(token[srcpos]) {
+                        case 'r':
+                            temp[destpos] = '\r';
+                            destpos++;
+                            break;
+                        case 'n':
+                            temp[destpos] = '\n';
+                            destpos++;
+                            break;
+                        case '\n':
+                            /* escape a newline to eliminate it */
+                            /* including multichar newlines */
+                            if(srcpos + 1 < len &&
+                               token[srcpos + 1] == '\r') {
+                                srcpos++;
+                            }
+                            break;
+                        case '\r':
+                            /* same as above */
+                            if(srcpos + 1 < len &&
+                               token[srcpos + 1] == '\n') {
+                                srcpos++;
+                            }
+                            break;
+                        case '\\':
+                            temp[destpos] = '\\';
+                            destpos++;
+                            break;
+                        default:
+                            LOG_PRINTF(cvm, "Invalid escape sequence: \\%c.\n", token[srcpos]);
+                            return(-1);
+                    }
+                } else {
+                    temp[destpos] = token[srcpos];
+                    destpos++;
+                }
+            }
+            if(destpos < len) {
+                temp = realloc(cvm->tokenmem, cvm->tokenmemlen + destpos + 1);
+                if(temp == NULL) {
+                    LOG_PRINTF(cvm, "Failed to trim tokenmem.\n");
+                    return(-1);
+                }
+                cvm->tokenmem = temp;
+            }
+            cvm->tokenmem[cvm->tokenmemlen + destpos] = '\0';
+            oldlen = cvm->tokenmemlen;
+            cvm->tokenmemlen += destpos + 1;
+        } else {
+            memcpy(temp, token, len);
+            temp[len] = '\0';
+            oldlen = cvm->tokenmemlen;
+            cvm->tokenmemlen += len + 1;
         }
     }
 
-    return(0);
+    return((long)oldlen);
 }
-
-#undef INSTRUCTION_COUNT
 
 #define ISJUNK(X) ((X) == ' ' || \
                    (X) == '\t' || \
@@ -396,82 +423,140 @@ static int valid_instruction(const char *name) {
                    (X) == '\n' || \
                    (X) == ';')
 
-static int tokenize(CrustyVM *cvm, const char *moduleName) {
-    unsigned int i, j;
-    unsigned int mem;
+#define PROGRAM (includestack[includestackptr])
+#define LEN (includesize[includestackptr])
+#define MODULE (includemodule[includestackptr])
+#define LINE (includeline[includestackptr])
+#define POS (includepos[includestackptr])
+
+/* this is before a bunch of stuff is guaranteed to be set up, so just fetch
+   the same information from local state */
+#define LOG_PRINTF_TOK(CVM, FMT, ...) \
+    (CVM)->log_cb((CVM)->log_priv, "%s:%s:%u: " FMT, \
+        (CVM)->stage, \
+        MODULE, \
+        LINE, \
+        ##__VA_ARGS__)
+
+#define GET_TOKEN(LINE, TOKEN) (&(cvm->tokenmem[cvm->line[LINE].offset[TOKEN]]))
+
+static int tokenize(CrustyVM *cvm,
+                    const char *modulename,
+                    const char *programdata,
+                    unsigned long programdatalen) {
+    unsigned int i;
     CrustyLine *temp;
-    unsigned int linestart, linelen, lineend;
-    unsigned int cursor;
+    unsigned long linelen, lineend;
+    unsigned long cursor;
     int scanningjunk;
     int quotedstring;
+    long tokenstart;
+    unsigned int linesmem;
+    long filelen;
 
-    char includestack[MAX_INCLUDE_DEPTH][PATH_MAX];
-    unsigned long includesizestack[MAX_INCLUDE_DEPTH];
-    char *includeModule[MAX_INCLUDE_DEPTH+1];
-    unsigned int includeModuleLine[MAX_INCLUDE_DEPTH+1];
-    int includestackptr = -1;
+    /* data to read from */
+    const char *includestack[MAX_INCLUDE_DEPTH];
+    /* length of module */
+    unsigned long includesize[MAX_INCLUDE_DEPTH];
+    /* name of module */
+    long includemodule[MAX_INCLUDE_DEPTH];
+    /* line within current module, for line metadata */
+    unsigned int includeline[MAX_INCLUDE_DEPTH];
+    /* byte in current module */
+    unsigned long includepos[MAX_INCLUDE_DEPTH];
+    unsigned int includestackptr = 0;
 
-    includeModule[0] = malloc(strlen(moduleName) + 1);
-    if(includeModule[0] == NULL) {
+    PROGRAM = programdata;
+    LEN = programdatalen;
+    tokenstart = add_token(cvm, modulename, strlen(modulename), 0);
+    if(tokenstart == -1) {
         LOG_PRINTF(cvm, "Failed to allocate memory for module name.\n");
         return(-1);
     }
-    if(add_extra_mem(cvm, includeModule[0]) < 0) {
-        LOG_PRINTF(cvm, "Failed to add module name to extra memory.\n");
-        free(includeModule[0]);
-        return(-1);
-    }
-    strcpy(includeModule[0], moduleName);
-    includeModuleLine[0] = 0;
+    MODULE = tokenstart;
+    LINE = 0;
+    POS = 0;
 
-    mem = 0; /* actual memory allocated for line */
-    cvm->lines = 0; /* size of initialized array */
-    cvm->logline = 0;
-
-    linestart = 0; /* running pointer to start of current line */
-    while(linestart < cvm->proglen) {
-        includeModuleLine[includestackptr + 1]++;
+    cvm->lines = 0; /* current line */
+    linesmem = 0; /* actual size of array */
+    for(;;) {
+        LINE++;
         /* find the end of meaningful line contents and total size of line up to
            the start of the next line */
         lineend = 0;
-        for(linelen = 0; linelen < cvm->proglen - linestart; linelen++) {
-            if(cvm->program[linestart + linelen] == '\r') {
+        for(linelen = 0; linelen < LEN - POS; linelen++) {
+            if(PROGRAM[POS + linelen] == '\r') {
                 linelen++;
-                if(lineend == 0 && cvm->program[linestart] != ';') {
+                /* mark this character as the end of the line, unless a comment
+                   was previously found, then that is the real line end, so
+                   don't overwrite it */
+                if(lineend == 0 && PROGRAM[POS] != ';') {
                     lineend = linelen;
                 }
-                if(linestart + linelen < cvm->proglen &&
-                   cvm->program[linestart + linelen] == '\n') {
+                if(POS + linelen < LEN - 1 &&
+                   PROGRAM[POS + linelen] == '\n') {
                     linelen++;
                 }
                 break;
-            } else if(cvm->program[linestart + linelen] == '\n') {
+            } else if(PROGRAM[POS + linelen] == '\n') {
                 linelen++;
-                if(lineend == 0 && cvm->program[linestart] != ';') {
+                /* same as above */
+                if(lineend == 0 && PROGRAM[POS] != ';') {
                     lineend = linelen;
                 }
-                if(linestart + linelen < cvm->proglen &&
-                   cvm->program[linestart + linelen] == '\r') {
+                if(POS + linelen < LEN - 1 &&
+                   PROGRAM[POS + linelen] == '\r') {
                     linelen++;
                 }
                 break;
-            } else if(cvm->program[linestart + linelen] == ';') { /* comments */
-                lineend = linelen;
+            } else if(PROGRAM[POS + linelen] == '"') {
+                /* allow quoted strings to span lines by scanning until the next
+                   quote (or end of file) is found */
+
+                /* ignore quoted strings in comments */
+                if(lineend == 0) {
+                    if(POS + linelen < LEN - 1 &&
+                       (PROGRAM[POS + linelen] == '\r' ||
+                        PROGRAM[POS + linelen] == '\n')) {
+                        LOG_PRINTF_TOK(cvm, "Quoted string opened at end of line.\n");
+                        return(-1);
+                    }
+                    linelen++;
+                    while(linelen < LEN - POS) {
+                        linelen++;
+                        if(PROGRAM[POS + linelen] == '"') {
+                            break;
+                        }
+                    }
+                }
+            } else if(PROGRAM[POS + linelen] == ';') { /* comments */
+                /* only count the first found comment */
+                if(lineend == 0) {
+                    lineend = linelen;
+                }
             }
         }
+        /* scanning reached the end of file without hitting a newline, so the
+           line length is just the rest of the file */
+        if(POS + linelen == LEN) {
+            lineend = linelen;
+        }
 
-        /* allocate memory for the line entry if needed */
-        if(cvm->lines == mem) {
-            mem = (mem > 0) ? (mem * 2) : 1;
-            temp = realloc(cvm->line, sizeof(CrustyLine) * mem);
+        /* allocate memory for a new line if needed */
+        if(cvm->lines + 1 > linesmem) {
+            temp = realloc(cvm->line, sizeof(CrustyLine) * (linesmem + 1));
             if(temp == NULL) {
+                LOG_PRINTF_TOK(cvm, "Failed to allocate memory for lines list.\n");
                 return(-1);
             }
             cvm->line = temp;
+            linesmem++;
         }
+
         cvm->line[cvm->lines].tokencount = 0;
-        cvm->line[cvm->lines].module = includeModule[includestackptr + 1];
-        cvm->line[cvm->lines].line = includeModuleLine[includestackptr + 1];
+        cvm->line[cvm->lines].offset = NULL;
+        cvm->line[cvm->lines].moduleOffset = MODULE;
+        cvm->line[cvm->lines].line = LINE;
 
         /* find starts and ends of tokens and insert them in to the line entry
 
@@ -482,224 +567,205 @@ static int tokenize(CrustyVM *cvm, const char *moduleName) {
         for(cursor = 0; cursor < lineend; cursor++) {
             if(!quotedstring) {
                 if(scanningjunk) {
-                    if(ISJUNK(cvm->program[linestart + cursor])) {
+                    /* if we're scanning for junk and there's still junk,
+                       nothing more to do. */
+                    if(ISJUNK(PROGRAM[POS + cursor])) {
                         continue;
                     }
 
-                    if(cvm->line[cvm->lines].tokencount == MAX_TOKENS) {
-                        LOG_PRINTF_LINE(cvm, "Line with too many tokens.\n");
+                    /* no longer junk, so create a space for the offset in to
+                       token memory. */
+                    cvm->line[cvm->lines].offset =
+                        realloc(cvm->line[cvm->lines].offset,
+                                sizeof(unsigned long) *
+                                (cvm->line[cvm->lines].tokencount + 1));
+                    if(cvm->line[cvm->lines].offset == NULL) {
+                        LOG_PRINTF_TOK(cvm, "Couldn't allocate memory for offsets.\n");
                         return(-1);
                     }
 
-                    /* check if at the start of a quoted string and see if there's
-                       space to advance the cursor by 1 to exclude the quotation
-                       mark from the token */
-                    if(cvm->program[linestart + cursor] == '"') {
-                        if(cursor == lineend) {
-                            LOG_PRINTF_LINE(cvm, "Quoted string starting at end of line.\n");
-                            return(-1);
-                        }
-                        /* replace the quotation mark with a space so a
-                           string immediately starting with a space doesn't
-                           trigger the end of a string */
-                        cvm->program[linestart + cursor] = ' ';
+                    /* check if at the start of a quoted string */
+                    if(PROGRAM[POS + cursor] == '"') {
+                        /* point the start to the next character, which will
+                           for sure exist because a quote at the end of the line
+                           is previously checked for */
                         cursor++;
+                        tokenstart = POS + cursor;
                         quotedstring = 1;
+                        /* don't reset junk scanning because there could be junk
+                           directly following a quoted string */
+                        continue;
                     }
-                    /* transition from junk to not junk by setting current token
-                       on current line to start of the string in program. */
-                    cvm->line[cvm->lines].offset[cvm->line[cvm->lines].tokencount] =
-                        linestart + cursor;
-                    cvm->line[cvm->lines].tokencount++;
+
+                    /* start scanning non-junk */
+                    tokenstart = POS + cursor;
                     scanningjunk = 0;
 
                     continue;
                 }
 
-                if(!ISJUNK(cvm->program[linestart + cursor])) {
+                /* if junk wasn't found, continue scanning */
+                if(!ISJUNK(PROGRAM[POS + cursor])) {
                     continue;
                 }
 
-                /* transition from not junk to junk */
-                cvm->program[linestart + cursor] = '\0';
+                /* transition from not junk to junk by adding the token to token
+                   memory, then pointing the current offset to the token */
+                tokenstart = add_token(cvm,
+                                       &(PROGRAM[tokenstart]),
+                                       POS + cursor - tokenstart,
+                                       0);
+                if(tokenstart == -1) {
+                    LOG_PRINTF_TOK(cvm, "Couldn't allocate memory for token.\n");
+                    return(-1);
+                }
+                cvm->line[cvm->lines].offset[cvm->line[cvm->lines].tokencount] =
+                    tokenstart;
+                cvm->line[cvm->lines].tokencount++;
+
                 scanningjunk = 1;
             } else {
                 /* this check is safe because cursor will have been incremented
-                   at least once to get to this point.
-                   
-                   check to see if we've reached a junk character, and see if
-                   there was a quotation mark just before. */
-                if(ISJUNK(cvm->program[linestart + cursor]) &&
-                   cvm->program[linestart + cursor - 1] == '"') {
-                    /* transition from quoted string to junk.  also, put the
-                       termination where the quotation mark would be so it's not
-                       included in the token */
-                    cvm->program[linestart + cursor - 1] = '\0';
+                   at least once to get to this point. */
+                if(PROGRAM[POS + cursor] == '"') {
+                    /* transition from quoted string to junk. Same as above. */
+                    tokenstart = add_token(cvm,
+                                           &(PROGRAM[tokenstart]),
+                                           POS + cursor - tokenstart,
+                                           1 /* quoted */);
+                    if(tokenstart == -1) {
+                        LOG_PRINTF_TOK(cvm, "Couldn't allocate memory for token.\n");
+                        return(-1);
+                    }
+                    cvm->line[cvm->lines].offset[cvm->line[cvm->lines].tokencount] =
+                        tokenstart;
+                    cvm->line[cvm->lines].tokencount++;
+
                     scanningjunk = 1;
                     quotedstring = 0;
                 }
             }
         }
 
-        /* check if an included file is being scanned over and if so, take away
-           the amount which has been scanned from it's size, if it's been fully
-           consumed, pop it off */
-        if(includestackptr >= 0) {
-            includesizestack[includestackptr] -= linelen;
-            if(includesizestack[includestackptr] <= 0) {
-                includestackptr--;
-            }
-        }
-
+        /* check for includes */
         if(cvm->line[cvm->lines].tokencount > 0) {
-            if(strcmp(&(cvm->program[cvm->line[cvm->lines].offset[0]]), "include") == 0) {
+            if(strcmp(GET_TOKEN(cvm->lines, 0), "include") == 0) {
                 if(cvm->line[cvm->lines].tokencount != 2) {
-                    LOG_PRINTF_LINE(cvm, "include takes a single filename");
+                    LOG_PRINTF_TOK(cvm, "include takes a single filename");
                     return(-1);
                 }
 
                 if(includestackptr == MAX_INCLUDE_DEPTH) {
-                    LOG_PRINTF_LINE(cvm, "Includes too deep.\n");
+                    LOG_PRINTF_TOK(cvm, "Includes too deep.\n");
                     return(-1);
                 }
 
-                /* read a file in and replace the whole "include" line (linelen)
-                   with the contents of the included file.  reallocate memory if
-                   necessary, move the contents to take up excess or make more space
-                   for the included file to fit in to, then finally read the
-                   contents in to the open space.  have parsing continue at the
-                   start as if nothing had happened.  keep track of includes to
-                   avoid circular inclusion. */
-                if(includestackptr >= 0) {
-                    for(i = 0; i < (unsigned int)includestackptr; i++) {
-                        if(strcmp(&(cvm->program[cvm->line[cvm->lines].offset[1]]),
-                                  includestack[i]) == 0) {
-                            LOG_PRINTF_LINE(cvm, "Circular includes.\n");
-                            return(-1);
-                        }
+                /* make sure the same file isn't included from cyclicly */
+                for(i = 0; i < includestackptr; i++) {
+                    if(strcmp(GET_TOKEN(cvm->lines, 1), includestack[i]) == 0) {
+                        LOG_PRINTF_TOK(cvm, "Circular includes.\n");
+                        return(-1);
                     }
                 }
 
-                includestackptr++;
-                strcpy(includestack[includestackptr],
-                       &(cvm->program[cvm->line[cvm->lines].offset[1]]));
-                includeModule[includestackptr + 1] =
-                    malloc(strlen(includestack[includestackptr]) + 1);
-                if(includeModule[includestackptr + 1] == NULL) {
-                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory for module name.\n");
-                    return(-1);
-                }
-                if(add_extra_mem(cvm, includeModule[includestackptr + 1]) < 0) {
-                    LOG_PRINTF_LINE(cvm, "Failed to add module name to extra memory.\n");
-                    free(includeModule[includestackptr + 1]);
-                    return(-1);
-                }
-                strcpy(includeModule[includestackptr + 1], includestack[includestackptr]);
-                includeModuleLine[includestackptr + 1] = 0;
-
+                /* load the file in to program memory.  Can't use any of the
+                   convenience macros though so log messages point to the right
+                   line/module */
                 FILE *in;
-                in = fopen(includestack[includestackptr], "rb");
+                in = fopen(GET_TOKEN(cvm->lines, 1), "rb");
                 if(in == NULL) {
-                    LOG_PRINTF_LINE(cvm, "Failed to open include file %s.\n",
-                               includestack[includestackptr]);
+                    LOG_PRINTF_TOK(cvm, "Failed to open include file %s.\n",
+                                   GET_TOKEN(cvm->lines, 1));
                     return(-1);
                 }
 
                 if(fseek(in, 0, SEEK_END) < 0) {
-                    LOG_PRINTF_LINE(cvm, "Failed to seek include file.\n");
+                    LOG_PRINTF_TOK(cvm, "Failed to seek include file.\n");
                     return(-1);
                 }
 
-                long filesize = ftell(in);
-                if(filesize < 0) {
-                    LOG_PRINTF_LINE(cvm, "Failed to get include file size.\n");
+                filelen = ftell(in);
+                if(filelen < 0) {
+                    LOG_PRINTF_TOK(cvm, "Failed to get include file size.\n");
                     return(-1);
                 }
-                includesizestack[includestackptr] = (unsigned long)filesize;
+                includesize[includestackptr+1] = (unsigned long)filelen;
 
-                /* determine if we need any additional space and how much to resize
-                   things if needed.  Shift data around if needed too. */
-                char *tempprog;
+                includestack[includestackptr+1] = malloc(includesize[includestackptr+1]);
+                if(includestack[includestackptr+1] == NULL) {
+                    LOG_PRINTF_TOK(cvm, "Failed to allocate memory for include.\n");
+                    return(-1);
+                }
 
-                if(includesizestack[includestackptr] < lineend) {
-                    /* file is shorter than line, so shift everything towards the
-                       beginning then shrink the buffer */
-                    memmove(&(cvm->program[linestart + lineend]),
-                            &(cvm->program[linestart + includesizestack[includestackptr]]),
-                            cvm->proglen - (linestart + lineend));
-                    /* old size minus the difference in size */
-                    tempprog = realloc(cvm->program,
-                                       cvm->proglen - (lineend - includesizestack[includestackptr]));
-                    if(tempprog == NULL) {
-                        LOG_PRINTF_LINE(cvm, "Failed to shrink program memory.\n");
-                        return(-1);
-                    }
-                    cvm->program = tempprog;
-                    cvm->proglen = cvm->proglen - (lineend - includesizestack[includestackptr]);
-                } else if(includesizestack[includestackptr] > lineend) {
-                    /* file is larger so enlarge the buffer, then move everything
-                       towards the end */
-                    /* size to start of this line + size to be loaded in + remaining
-                       size */
-                    tempprog = realloc(cvm->program,
-                                       linestart +
-                                       includesizestack[includestackptr] +
-                                       (cvm->proglen - lineend));
-                    if(tempprog == NULL) {
-                        LOG_PRINTF_LINE(cvm, "Failed to grow program memory.\n");
-                        return(-1);
-                    }
-                    cvm->program = tempprog;
-                    memmove(&(cvm->program[linestart + includesizestack[includestackptr]]),
-                            &(cvm->program[linestart + lineend]),
-                            cvm->proglen - (linestart + lineend));
-                    cvm->proglen = cvm->proglen + (includesizestack[includestackptr] - lineend);
-                } /* in the unlikely case they're equal size, nothing to do */
-
-                /* read the contents in to the space made for it */
+                /* read the contents in to memory */
                 rewind(in);
-                if(fread(&(cvm->program[linestart]), 1, includesizestack[includestackptr], in) <
-                   includesizestack[includestackptr]) {
-                    LOG_PRINTF_LINE(cvm, "Failed to read include file.\n");
+                /* needs to be made non-const so this buffer can be read in to,
+                   but the array is of const char ** because the 0th entry is
+                   always the const char passed in to the function, which is
+                   never modified. */
+                if(fread((char *)(includestack[includestackptr+1]),
+                         1,
+                         includesize[includestackptr+1],
+                         in) < includesize[includestackptr]) {
+                    LOG_PRINTF_TOK(cvm, "Failed to read include file.\n");
                     return(-1);
                 }
                 fclose(in);
 
-                /* don't advance linestart or increase the number of lines so
-                   additional includes may be evaluated and include lines don't end
-                   up in the tokenizer's output */
+                /* add the module name */
+                includestackptr++;
+                MODULE = cvm->line[cvm->lines].offset[1];
+                LINE = 0;
+                POS = 0;
+
+                /* we're done with this line and it won't end up in the line
+                   list so free its offsets and it will be reused, tokencount
+                   will be reset later */
+                free(cvm->lines[cvm->line].offset);
+                cvm->lines[cvm->line].offset = NULL;
+
+                /* don't advance line count */
+                POS += linelen;
                 continue;
+            } else { /* no include, so just advance things normal */
+                POS += linelen;
+                cvm->lines++;
             }
+        } else { /* don't have lines increment if it's a blank line */
+            /* no need to free offset because no token was ever found */
+            POS += linelen;
+        }
 
-            cvm->lines++;
-        } /* don't have lines increment if it's a blank line */
-
-        linestart += linelen;
-    }
-
-    /* try to shrink line array to needed size, don't really care if it fails. */
-    temp = realloc(cvm->line, sizeof(CrustyLine) * cvm->lines);
-    if(temp != NULL) {
-        cvm->line = temp;
-    }
-
-    /* copy offsets to pointers, because they won't change beyond this point */
-    for(i = 0; i < cvm->lines; i++) {
-        for(j = 0; j < cvm->line[i].tokencount; j++) {
-            cvm->line[i].token[j] = &(cvm->program[cvm->line[i].offset[j]]);
+        /* reached the end, so pop it off, if already at the bottom, tokenizing
+           is done */
+        if(POS == LEN) {
+            if(includestackptr == 0) {
+                break;
+            }
+            /* see comment above before fread() */
+            free((char *)PROGRAM);
+            includestackptr--;
         }
     }
 
     return(0);
 }
 
+#undef LINE_PRINTF_TOK
+#undef LINE
+#undef MODULE
+#undef LEN
+#undef PROGRAM
 #undef ISJUNK
 
-static CrustyMacro *find_macro(CrustyMacro *macro, unsigned int count, const char *name) {
+static CrustyMacro *find_macro(CrustyVM *cvm,
+                               CrustyMacro *macro,
+                               unsigned int count,
+                               const char *name) {
     unsigned int i;
 
     for(i = 0; i < count; i++) {
-        if(strcmp(macro[i].name, name) == 0) {
+        if(strcmp(&(cvm->tokenmem[macro[i].nameOffset]), name) == 0) {
             return(&(macro[i]));
         }
     }
@@ -707,10 +773,13 @@ static CrustyMacro *find_macro(CrustyMacro *macro, unsigned int count, const cha
     return(NULL);
 }
 
-static char *string_replace(CrustyVM *cvm,
-                            char *token,
-                            char *macro,
-                            char *replace) {
+static long string_replace(CrustyVM *cvm,
+                            long tokenOffset,
+                            long macroOffset,
+                            long replaceOffset) {
+    char *token = &(cvm->tokenmem[tokenOffset]);
+    char *macro = &(cvm->tokenmem[macroOffset]);
+    char *replace = &(cvm->tokenmem[replaceOffset]);
     int macrofound = 0;
     char *macroInToken;
     int tokenlen = strlen(token);
@@ -721,6 +790,7 @@ static char *string_replace(CrustyVM *cvm,
     int newlen;
     int i;
     int srcpos, dstpos;
+    long tokenstart;
 
     /* scan the token to find the number of instances of the macro */
     macroInToken = strstr(token, macro);
@@ -744,23 +814,23 @@ static char *string_replace(CrustyVM *cvm,
     /* if nothing, just return the token so it can be assigned to whatever
        needed a potentially processed token */
     if(macrofound == 0) {
-        return(token);
+        return(tokenOffset);
     }
 
-    /* token take away the macros, add replacements and null terminator */
+    /* token take away the macros, add replacements */
     newlen = tokenlen - (macrolen * macrofound) + (strlen(replace) * macrofound);
-    
-    /* memory allocation and accounting stuff */
-    temp = malloc(newlen + 1);
-    if(temp == NULL) {
-        LOG_PRINTF(cvm, "Failed to allocate memory for string replacement.\n");
-        return(NULL);
-    }
-    if(add_extra_mem(cvm, temp) < 0) {
+
+    /* will return an index in to a null terminated buffer long enough for newlen */
+    tokenstart = add_token(cvm, NULL, newlen, 0);
+    if(tokenstart < 0) {
         LOG_PRINTF(cvm, "Failed to add string replace memory to extra memory.\n");
-        free(temp);
-        return(NULL);
+        return(-1);
     }
+    temp = &(cvm->tokenmem[tokenstart]);
+    /* update these because they may have moved */
+    token = &(cvm->tokenmem[tokenOffset]);
+    macro = &(cvm->tokenmem[macroOffset]);
+    replace = &(cvm->tokenmem[replaceOffset]);
 
     /* alternate scanning for macros, copying from the token in to the
        destination up until the found macro, then copy the replacement in to the
@@ -786,10 +856,7 @@ static char *string_replace(CrustyVM *cvm,
     /* see if there's anything after the last macro replacement to copy over */
     memcpy(&(temp[dstpos]), &(token[srcpos]), newlen - dstpos);
 
-    /* terminate the string */
-    temp[newlen] = '\0';
-
-    return(temp);
+    return(tokenstart);
 }
 
 
@@ -996,9 +1063,9 @@ static CrustyExpr *add_expr(CrustyVM *cvm,
     }
 
 /* this is all awful and probably a horrible, inefficient way to do this but I don't know a better way */
-static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
+/* TODO: more operators, like comparison and bit ops */
+static long evaluate_expr(CrustyVM *cvm, const char *expression) {
     CrustyExpr *expr = NULL;
-    char *tempmem;
     int exprmem = 0;
     CrustyExpr *temp;
     CrustyExpr *new = NULL;
@@ -1010,6 +1077,7 @@ static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
 
     int i;
     int exprlen = strlen(expression);
+    long tokenstart;
 
     for(i = 0; i < exprlen; i++) {
         if(ISJUNK(expression[i])) {
@@ -1131,33 +1199,81 @@ static char *evaluate_expr(CrustyVM *cvm, const char *expression) {
 
     /* create the string containing the evaluated value */
     valsize = snprintf(NULL, 0, "%d", temp->number);
-    tempmem = malloc(valsize + 1);
-    if(tempmem == NULL) {
+    /* returned buffer is already null terminated and large enough to fit valsize */
+    tokenstart = add_token(cvm, NULL, valsize, 0);
+    if(tokenstart < 0) {
         LOG_PRINTF_LINE(cvm, "Failed to allocate memory for expression value string.\n");
         goto error;
     }
-    if(add_extra_mem(cvm, tempmem) < 0) {
-        LOG_PRINTF_LINE(cvm, "Failed to add expression result to extra memory.\n");
-        free(tempmem);
-        return(NULL);
-    }
-    if(snprintf(tempmem, valsize + 1, "%d", temp->number) != valsize) {
+    if(snprintf(&(cvm->tokenmem[tokenstart]),
+                valsize + 1,
+                "%d",
+                temp->number) != valsize) {
         LOG_PRINTF_LINE(cvm, "Failed to write expression value in to string.\n");
         goto error;
     }
     free(expr);
 
-    return(tempmem);
+    return(tokenstart);
 error:
     if(expr != NULL) {
         free(expr);
     }
 
-    return(NULL);
+    return(-1);
 }
 
 #undef ISJUNK
 
+#define INSTRUCTION_COUNT (24)
+
+static int valid_instruction(const char *name) {
+    int i;
+
+    const char *INSTRUCTION_LIST[] = {
+        "stack",
+        "proc",
+        "export",
+        "ret",
+        "label",
+        "static",
+        "local",
+        "move",
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "and",
+        "or",
+        "xor",
+        "shl",
+        "shr",
+        "cmp",
+        "call",
+        "jump",
+        "jumpn",
+        "jumpz",
+        "jumpl",
+        "jumpg"
+    };  
+
+    for(i = 0; i < INSTRUCTION_COUNT; i++) {
+        if(strcmp(name, INSTRUCTION_LIST[i]) == 0) {
+            return(1);
+        }
+    }
+
+    return(0);
+}
+
+#undef INSTRUCTION_COUNT
+
+#define GET_ACTIVE(TOKEN) (&(cvm->tokenmem[active.offset[TOKEN]]))
+#define GET_VAR(VAR) (&(cvm->tokenmem[vars[VAR]]))
+#define GET_VALUE(VAL) (&(cvm->tokenmem[values[VAL]]))
+#define GET_MACRO_STACK_NAME(PTR) (&(cvm->tokenmem[macrostack[PTR]->nameOffset]))
+
+/* TODO: add a way to pass in defines */
 static int preprocess(CrustyVM *cvm) {
     unsigned int i, j;
     CrustyLine *new = NULL;
@@ -1166,6 +1282,7 @@ static int preprocess(CrustyVM *cvm) {
     char *temp;
 
     CrustyLine active;
+    active.offset = NULL;
 
     CrustyMacro *macro = NULL;
     unsigned int macrocount = 0;
@@ -1173,14 +1290,16 @@ static int preprocess(CrustyVM *cvm) {
 
     unsigned int returnstack[MACRO_STACK_SIZE];
     CrustyMacro *macrostack[MACRO_STACK_SIZE];
-    char *macroargs[MACRO_STACK_SIZE][MAX_MACRO_ARGS];
+    long *macroargs[MACRO_STACK_SIZE];
     int macrostackptr = -1;
 
-    char **vars = NULL;
-    char **values = NULL;
+    long *vars = NULL;
+    long *values = NULL;
     unsigned int varcount = 0;
 
     int foundmacro = 0;
+
+    long tokenstart;
 
     mem = 0; /* actual memory allocated for line */
     lines = 0; /* size of initialized array */
@@ -1190,42 +1309,62 @@ static int preprocess(CrustyVM *cvm) {
         /* no need to check if tokencount > 0 because those lines were filtered
            out previously */
 
+        if(active.offset != NULL) {
+            free(active.offset);
+        }
+        active.offset = malloc(sizeof(long) * cvm->line[cvm->logline].tokencount);
+        if(active.offset == NULL) {
+            LOG_PRINTF_LINE(cvm, "Failed to allocate memory for active token arguments.");
+            goto failure;
+        }
         /* make mutable active line */
         active.tokencount = cvm->line[cvm->logline].tokencount;
-        active.module = cvm->line[cvm->logline].module;
+        active.moduleOffset = cvm->line[cvm->logline].moduleOffset;
         active.line = cvm->line[cvm->logline].line;
-        /* replace any tokens with tokens containing any possible macro
-           replacement values */
-        for(i = 0; i < active.tokencount; i++) {
-            /* don't mutate the endmacro line while processing a macro, since it
-               could replace substrings causing the macro to never end */
-            if((macrostackptr >= 0 && macrostack[macrostackptr]->argcount > 0) &&
-               strcmp(cvm->line[cvm->logline].token[0], "endmacro") != 0) {
-                for(j = 0; j < macrostack[macrostackptr]->argcount; j++) {
-                    /* function will just pass back the token passed to
-                       it in the case there's nothing to be done,
-                       otherwise it'll create the new string in extramem
-                       and update the length and return it. */
-                    active.token[i] =
-                        string_replace(cvm,
-                                       cvm->line[cvm->logline].token[i],
-                                       macrostack[macrostackptr]->arg[j],
-                                       macroargs[macrostackptr][j]);
-                    if(active.token[i] == NULL) {
+        /* don't mutate the endmacro line while processing a macro, since it
+           could replace substrings causing the macro to never end */
+        if(curmacro != NULL &&
+           strcmp(GET_TOKEN(cvm->logline, 0), "endmacro") == 0 &&
+           strcmp(GET_TOKEN(cvm->logline, 1), &(cvm->tokenmem[curmacro->nameOffset])) == 0) {
+            for(i = 0; i < active.tokencount; i++) {
+                active.offset[i] = cvm->line[cvm->logline].offset[i];
+            }
+        } else {
+            /* replace any tokens with tokens containing any possible macro
+               replacement values */
+            for(i = 0; i < active.tokencount; i++) {
+                if((macrostackptr >= 0 && macrostack[macrostackptr]->argcount > 0)) {
+                    for(j = 0; j < macrostack[macrostackptr]->argcount; j++) {
+                        /* function will just pass back the token passed to
+                           it in the case there's nothing to be done,
+                           otherwise it'll create the new string in extramem
+                           and update the length and return it. */
+                        tokenstart =
+                            string_replace(cvm,
+                                           cvm->line[cvm->logline].offset[i],
+                                           macrostack[macrostackptr]->argOffset[j],
+                                           macroargs[macrostackptr][j]);
+                        if(tokenstart == -1) {
+                            /* reason will have already been printed */
+                            goto failure;
+                        }
+                        active.offset[i] = tokenstart;
+                    }
+                } else {
+                    active.offset[i] = cvm->line[cvm->logline].offset[i];
+                }
+                for(j = 0; j < varcount; j++) {
+                    tokenstart = string_replace(cvm, active.offset[i], vars[j], values[j]);
+                    if(tokenstart == -1) {
                         /* reason will have already been printed */
                         goto failure;
                     }
+                    active.offset[i] = tokenstart;
                 }
-            } else {
-                active.token[i] = cvm->line[cvm->logline].token[i];
-            }
-            for(j = 0; j < varcount; j++) {
-                active.token[i] = 
-                    string_replace(cvm, active.token[i], vars[j], values[j]);
             }
         }
 
-        if(strcmp(active.token[0], "macro") == 0) {
+        if(strcmp(GET_ACTIVE(0), "macro") == 0) {
             if(curmacro == NULL) { /* don't evaluate any macros which may be
                                       within other macros, which will be
                                       evaluated on subsequent passes. */
@@ -1234,23 +1373,30 @@ static int preprocess(CrustyVM *cvm) {
                     goto failure;
                 }
 
-                curmacro = find_macro(macro, macrocount, active.token[1]);
+                curmacro = find_macro(cvm, macro, macrocount, GET_ACTIVE(1));
 
                 /* if the macro wasn't found, allocate space for it, otherwise
                    override previous declaration */
                 if(curmacro == NULL) {
                     curmacro = realloc(macro, sizeof(CrustyMacro) * (macrocount + 1));
                     if(curmacro == NULL) {
+                        LOG_PRINTF_LINE(cvm, "Failed to allocate memory for macro.\n");
                         goto failure;
                     }
                     macro = curmacro;
                     curmacro = &(macro[macrocount]);
                     macrocount++;
                 }
-                curmacro->name = active.token[1];
+                curmacro->nameOffset = active.offset[1];
                 curmacro->argcount = active.tokencount - 2;
+                curmacro->argOffset = malloc(sizeof(long) * curmacro->argcount);
+                if(curmacro->argOffset == NULL) {
+                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory for macro args list.\n");
+                    free(curmacro);
+                    goto failure;
+                }
                 for(i = 2; i < active.tokencount; i++) {
-                    curmacro->arg[i - 2] = active.token[i];
+                    curmacro->argOffset[i - 2] = active.offset[i];
                 }
                 curmacro->start = cvm->logline + 1; /* may not be defined now but a
                                                   valid program will have it
@@ -1263,7 +1409,7 @@ static int preprocess(CrustyVM *cvm) {
             } else {
                 foundmacro = 1;
             }
-        } else if(strcmp(active.token[0], "endmacro") == 0) {
+        } else if(strcmp(GET_ACTIVE(0), "endmacro") == 0) {
             if(active.tokencount != 2) {
                 LOG_PRINTF_LINE(cvm, "endmacro takes a name.\n");
                 goto failure;
@@ -1272,7 +1418,7 @@ static int preprocess(CrustyVM *cvm) {
             /* if a macro is being read in and the end of that macro has
                been reached, another macro can start being read in again */
             if(curmacro != NULL &&
-               strcmp(active.token[1], curmacro->name) == 0) {
+               strcmp(GET_ACTIVE(1), &(cvm->tokenmem[curmacro->nameOffset])) == 0) {
                 curmacro = NULL;
 
                 /* suppress copying evaluated endmacro in to destination */
@@ -1282,15 +1428,16 @@ static int preprocess(CrustyVM *cvm) {
             /* if a macro is being output and the end of the macro currently
                being output is reached, then pop it off the stack. */
             if(macrostackptr >= 0 &&
-               strcmp(macrostack[macrostackptr]->name,
-                      active.token[1]) == 0) {
+               strcmp(GET_MACRO_STACK_NAME(macrostackptr),
+                      GET_ACTIVE(1)) == 0) {
+                free(macroargs[macrostackptr]);
                 cvm->logline = returnstack[macrostackptr];
                 macrostackptr--;
 
                 /* suppress copying evaluated endmacro in to destination */
                 goto skip_copy;
             }
-        } else if(strcmp(active.token[0], "if") == 0) {
+        } else if(strcmp(GET_ACTIVE(0), "if") == 0) {
             /* don't evaluate macro calls while reading in a macro, only
                while writing out */
             if(curmacro == NULL) {
@@ -1305,14 +1452,14 @@ static int preprocess(CrustyVM *cvm) {
 
                 char *endchar;
                 int num;
-                num = strtol(active.token[1], &endchar, 0);
+                num = strtol(GET_ACTIVE(1), &endchar, 0);
                 /* check that the entire string was valid and that the
                    result was not zero */
-                if(active.token[1][0] != '\0' && *endchar == '\0' && num != 0) {
+                if(GET_ACTIVE(1)[0] != '\0' && *endchar == '\0' && num != 0) {
                     /* move everything over 2 */
                     for(j = 2; j < active.tokencount; j++) {
-                        cvm->line[cvm->logline].token[j - 2] =
-                            cvm->line[cvm->logline].token[j];
+                        cvm->line[cvm->logline].offset[j - 2] =
+                            cvm->line[cvm->logline].offset[j];
                     }
                     cvm->line[cvm->logline].tokencount -= 2;
 
@@ -1321,7 +1468,7 @@ static int preprocess(CrustyVM *cvm) {
 
                 goto skip_copy; /* don't copy and don't reevaluate */
             }
-        } else if(strcmp(active.token[0], "expr") == 0) {
+        } else if(strcmp(GET_ACTIVE(0), "expr") == 0) {
             if(curmacro == NULL) { /* don't evaluate any expressions which
                                       may be within macros, which will be
                                       evaluated on subsequent passes. */
@@ -1331,23 +1478,23 @@ static int preprocess(CrustyVM *cvm) {
                     goto failure;
                 }
 
-                temp = realloc(vars, sizeof(char *) * (varcount + 1));
+                temp = realloc(vars, sizeof(long) * (varcount + 1));
                 if(temp == NULL) {
                     LOG_PRINTF_LINE(cvm, "Failed to allocate memory.\n");
                     goto failure;
                 }
-                vars = (char **)temp;
+                vars = (long *)temp;
 
-                temp = realloc(values, sizeof(char *) * (varcount + 1));
+                temp = realloc(values, sizeof(long) * (varcount + 1));
                 if(temp == NULL) {
                     LOG_PRINTF_LINE(cvm, "Failed to allocate memory.\n");
                     goto failure;
                 }
-                values = (char **)temp;
+                values = (long *)temp;
 
-                vars[varcount] = active.token[1];
-                values[varcount] = evaluate_expr(cvm, active.token[2]);
-                if(values[varcount] == NULL) {
+                vars[varcount] = active.offset[1];
+                values[varcount] = evaluate_expr(cvm, GET_ACTIVE(2));
+                if(values[varcount] < 0) {
                     LOG_PRINTF_LINE(cvm, "Expression evaluation failed.\n");
                     goto failure;
                 }
@@ -1357,7 +1504,7 @@ static int preprocess(CrustyVM *cvm) {
             } else {
                 foundmacro = 1;
             }
-        } else if(!valid_instruction(active.token[0])) {
+        } else if(!valid_instruction(GET_ACTIVE(0))) {
             /* don't evaluate macro calls while reading in a macro, only
                while writing out */
             if(curmacro == NULL) {
@@ -1365,32 +1512,39 @@ static int preprocess(CrustyVM *cvm) {
                     LOG_PRINTF_LINE(cvm, "Macro stack filled.\n");
                 }
 
-                macrostack[macrostackptr + 1] = find_macro(macro,
+                macrostack[macrostackptr + 1] = find_macro(cvm,
+                                                           macro,
                                                            macrocount,
-                                                           active.token[0]);
+                                                           GET_ACTIVE(0));
                 if(macrostack[macrostackptr + 1] == NULL) {
                     LOG_PRINTF_LINE(cvm, "Invalid keyword or macro not found: %s.\n",
-                               active.token[0]);
+                                    GET_ACTIVE(0));
                     goto failure;
                 }
 
                 if(macrostack[macrostackptr + 1] == curmacro) {
                     LOG_PRINTF_LINE(cvm, "Macro called recursively: %s.\n",
-                               curmacro->name);
+                                    &(cvm->tokenmem[curmacro->nameOffset]));
                     goto failure;
                 }
                 if(active.tokencount - 1 !=
                    macrostack[macrostackptr + 1]->argcount) {
                     LOG_PRINTF_LINE(cvm, "Wrong number of arguments to macro: "
-                                    "got %d, expected %d.\n",
+                                         "got %d, expected %d.\n",
                                active.tokencount - 1,
                                macrostack[macrostackptr + 1]->argcount);
                     goto failure;
                 }
 
                 macrostackptr++;
+                macroargs[macrostackptr] =
+                    malloc(sizeof(long) * macrostack[macrostackptr]->argcount);
+                if(macroargs[macrostackptr] == NULL) {
+                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory for macro args.\n");
+                    goto failure;
+                }
                 for(i = 0; i < macrostack[macrostackptr]->argcount; i++) {
-                    macroargs[macrostackptr][i] = active.token[i + 1];
+                    macroargs[macrostackptr][i] = active.offset[i + 1];
                 }
                 returnstack[macrostackptr] = cvm->logline;
                 cvm->logline = macrostack[macrostackptr]->start;
@@ -1403,20 +1557,26 @@ static int preprocess(CrustyVM *cvm) {
         /* don't actually output a macro being read in */
         if(curmacro == NULL) {
             if(lines == mem) {
-                temp = realloc(new, sizeof(CrustyLine) * (mem ? (mem * 2) : 1));
+                temp = realloc(new, sizeof(CrustyLine) * (mem + 1));
                 if(temp == NULL) {
+                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory for line copy.\n");
                     goto failure;
                 }
                 new = (CrustyLine *)temp;
-                mem = mem ? (mem * 2) : 1;
+                new[lines].offset = NULL;
+                mem++;
             }
 
-
             new[lines].tokencount = active.tokencount;
-            new[lines].module = active.module;
+            new[lines].moduleOffset = active.moduleOffset;
             new[lines].line = active.line;
+            new[lines].offset = malloc(sizeof(long) * new[lines].tokencount);
+            if(new[lines].offset == NULL) {
+                LOG_PRINTF_LINE(cvm, "Failed to allocate memory for line offsets copy.\n");
+                goto failure;
+            }
             for(i = 0; i < new[lines].tokencount; i++) {
-                new[lines].token[i] = active.token[i];
+                new[lines].offset[i] = active.offset[i];
             }
 
             lines++;
@@ -1427,21 +1587,24 @@ skip_copy:
     }
 
     if(curmacro != NULL) {
-        LOG_PRINTF_LINE(cvm, "Macro without endmacro: %s.\n", curmacro->name);
+        LOG_PRINTF_LINE(cvm, "Macro without endmacro: %s.\n",
+                        &(cvm->tokenmem[curmacro->nameOffset]));
         return(-1);
     }
 
-    temp = realloc(new, sizeof(CrustyLine) * lines);
-    if(temp == NULL) {
-        LOG_PRINTF(cvm, "Failed to shrink line array.\n");
-        return(-1);
+    for(i = 0; i < cvm->lines; i++) {
+        free(cvm->line[i].offset);
     }
-
     free(cvm->line);
-    cvm->line = (CrustyLine *)temp;
+    cvm->line = new;
     cvm->lines = lines;
 
     if(macro != NULL) {
+        for(i = 0; i < macrocount; i++) {
+            if(macro[i].argOffset != NULL) {
+                free(macro[i].argOffset);
+            }
+        }
         free(macro);
     }
 
@@ -1449,12 +1612,29 @@ skip_copy:
 
 failure:
     if(new != NULL) {
+        for(i = 0; i < lines; i++) {
+            if(new[i].offset != NULL) {
+                free(new[i].offset);
+            }
+        }
         free(new);
+    }
+
+    if(macro != NULL) {
+        for(i = 0; i < macrocount; i++) {
+            if(macro[i].argOffset != NULL) {
+                free(macro[i].argOffset);
+            }
+        }
+        free(macro);
     }
 
     return(-1);
 }
 
+#undef GET_VALUE
+#undef GET_VAR
+#undef GET_ACTIVE
 
 static int find_procedure(CrustyVM *cvm,
                           const char *name) {
@@ -1492,7 +1672,8 @@ static int find_variable(CrustyVM *cvm,
     if(proc != NULL) {
         /* scan local */
         for(i = 0; i < proc->vars; i++) {
-            if(strcmp(cvm->var[proc->varIndex[i]].name, name) == 0) {
+            if(strcmp(&(cvm->tokenmem[cvm->var[proc->varIndex[i]].nameOffset]),
+                      name) == 0) {
                 return(proc->varIndex[i]);
             }
         }
@@ -1500,7 +1681,7 @@ static int find_variable(CrustyVM *cvm,
     /* scan global */
     for(i = 0; i < cvm->vars; i++) {
         if(variable_is_global(&(cvm->var[i]))) {
-            if(strcmp(cvm->var[i].name, name) == 0) {
+            if(strcmp(&(cvm->tokenmem[cvm->var[i].nameOffset]), name) == 0) {
                 return(i);
             }
         }
@@ -1510,7 +1691,7 @@ static int find_variable(CrustyVM *cvm,
 }
 
 static int new_variable(CrustyVM *cvm,
-                        const char *name,
+                        long nameOffset,
                         CrustyType type,
                         unsigned int length,
                         char *chrinit,
@@ -1520,7 +1701,7 @@ static int new_variable(CrustyVM *cvm,
                         CrustyProcedure *proc) {
     char *temp;
 
-    if(find_variable(cvm, proc, name) >= 0) {
+    if(find_variable(cvm, proc, &(cvm->tokenmem[nameOffset])) >= 0) {
         if(cb != NULL) {
             LOG_PRINTF(cvm, "Redeclaration of callback variable.\n");
         } else if(proc == NULL) {
@@ -1537,7 +1718,7 @@ static int new_variable(CrustyVM *cvm,
         return(-1);
     }
     cvm->var = (CrustyVariable *)temp;
-    cvm->var[cvm->vars].name = name;
+    cvm->var[cvm->vars].nameOffset = nameOffset;
     cvm->var[cvm->vars].length = length;
     cvm->var[cvm->vars].type = type;
     cvm->var[cvm->vars].chrinit = chrinit;
@@ -1709,8 +1890,8 @@ static int variable_declaration(CrustyVM *cvm,
         type = CRUSTY_TYPE_INT;
         length = 1;
 
-        num = strtol(line->token[2], &end, 0);
-        if(end != line->token[2] && *end == '\0') {
+        num = strtol(&(cvm->tokenmem[line->offset[2]]), &end, 0);
+        if(end != &(cvm->tokenmem[line->offset[2]]) && *end == '\0') {
             intinit = malloc(sizeof(int));
             if(intinit == NULL) {
                 LOG_PRINTF_LINE(cvm, "Failed to allocate memory for initializer.\n");
@@ -1723,9 +1904,9 @@ static int variable_declaration(CrustyVM *cvm,
             return(-1);
         }
     } else if(line->tokencount == 4) {
-        if(strcmp(line->token[2], "ints") == 0) {
+        if(strcmp(&(cvm->tokenmem[line->offset[2]]), "ints") == 0) {
             type = CRUSTY_TYPE_INT;
-            length = number_list_ints(line->token[3], &intinit);
+            length = number_list_ints(&(cvm->tokenmem[line->offset[3]]), &intinit);
             if(length < 0) {
                 LOG_PRINTF_LINE(cvm, "Failed to allocate memory for initializer.\n");
                 return(-1);
@@ -1746,9 +1927,9 @@ static int variable_declaration(CrustyVM *cvm,
             }
             /* array with initializer, nothing to do, since length and intinit
                are already what they should be */
-        } else if(strcmp(line->token[2], "floats") == 0) {
+        } else if(strcmp(&(cvm->tokenmem[line->offset[2]]), "floats") == 0) {
             type = CRUSTY_TYPE_FLOAT;
-            length = number_list_floats(line->token[3], &floatinit);
+            length = number_list_floats(&(cvm->tokenmem[line->offset[3]]), &floatinit);
             if(length < 0) {
                 LOG_PRINTF_LINE(cvm, "Failed to allocate memory for initializer.\n");
                 return(-1);
@@ -1757,9 +1938,9 @@ static int variable_declaration(CrustyVM *cvm,
                 return(-1);
             }
             /* array with initializer */
-        } else if(strcmp(line->token[2], "string") == 0) {
+        } else if(strcmp(&(cvm->tokenmem[line->offset[2]]), "string") == 0) {
             type = CRUSTY_TYPE_CHAR;
-            length = strlen(line->token[3]);
+            length = strlen(&(cvm->tokenmem[line->offset[3]]));
 
             chrinit = malloc(length + 1);
             if(chrinit == NULL) {
@@ -1767,7 +1948,10 @@ static int variable_declaration(CrustyVM *cvm,
                 return(-1);
             }
 
-            strncpy(chrinit, line->token[3], length + 1);
+            /* This line throws a warning in gcc 9.3.0 about the length argument
+               depending on the source argument but the same variable is used to
+               allocate the destination argument anyway. */
+            strncpy(chrinit, &(cvm->tokenmem[line->offset[3]]), length + 1);
         } else {
             LOG_PRINTF_LINE(cvm, "variable declaration can be array or string.\n");
             return(-1);
@@ -1781,7 +1965,7 @@ static int variable_declaration(CrustyVM *cvm,
     }
 
     if(new_variable(cvm,
-                    line->token[1],
+                    line->offset[1],
                     type,
                     length,
                     chrinit, intinit, floatinit,
@@ -1800,7 +1984,7 @@ static int symbols_scan(CrustyVM *cvm) {
 
     CrustyLine *new = NULL;
     char *temp;
-    int lines;
+    unsigned int lines;
 
     new = malloc(sizeof(CrustyLine) * cvm->lines);
     if(new == NULL) {
@@ -1817,7 +2001,7 @@ static int symbols_scan(CrustyVM *cvm) {
         }
         /* no need to check if tokencount > 0 because those lines were filtered
            out previously */
-        if(strcmp(cvm->line[cvm->logline].token[0], "proc") == 0) {
+        if(strcmp(GET_TOKEN(cvm->logline, 0), "proc") == 0) {
             if(cvm->line[cvm->logline].tokencount < 2) {
                 LOG_PRINTF_LINE(cvm, "proc takes a name as argument.\n");
                 goto failure;
@@ -1828,7 +2012,7 @@ static int symbols_scan(CrustyVM *cvm) {
                 goto failure;
             }
 
-            if(find_procedure(cvm, cvm->line[cvm->logline].token[1]) >= 0) {
+            if(find_procedure(cvm, GET_TOKEN(cvm->logline, 1)) >= 0) {
                 LOG_PRINTF_LINE(cvm, "Redeclaration of procedure.\n");
                 goto failure;
             }
@@ -1842,7 +2026,7 @@ static int symbols_scan(CrustyVM *cvm) {
             curProc = &(cvm->proc[cvm->procs]);
             cvm->procs++;
 
-            curProc->name = cvm->line[cvm->logline].token[1];
+            curProc->nameOffset = cvm->line[cvm->logline].offset[1];
             curProc->start = lines;
             curProc->length = 0;
             curProc->stackneeded = 0;
@@ -1861,7 +2045,7 @@ static int symbols_scan(CrustyVM *cvm) {
                    referenced directly but only can exist as a single int with
                    a length of 1. */
                 if(new_variable(cvm,
-                                cvm->line[cvm->logline].token[i + 2],
+                                cvm->line[cvm->logline].offset[i + 2],
                                 CRUSTY_TYPE_INT,
                                 0,
                                 NULL, NULL, NULL,
@@ -1873,7 +2057,7 @@ static int symbols_scan(CrustyVM *cvm) {
             }                    
 
             continue; /* don't copy in to new list */
-        } else if(strcmp(cvm->line[cvm->logline].token[0], "ret") == 0) {
+        } else if(strcmp(GET_TOKEN(cvm->logline, 0), "ret") == 0) {
             if(curProc == NULL) {
                 LOG_PRINTF_LINE(cvm, "ret without proc.\n");
                 goto failure;
@@ -1882,7 +2066,7 @@ static int symbols_scan(CrustyVM *cvm) {
             curProc = NULL;
 
             /* this is a real instruction, so it should be copied over */
-        } else if(strcmp(cvm->line[cvm->logline].token[0], "static") == 0) {
+        } else if(strcmp(GET_TOKEN(cvm->logline, 0), "static") == 0) {
             if(cvm->line[cvm->logline].tokencount < 2) {
                 LOG_PRINTF_LINE(cvm, "static takes a name as argument.\n");
                 goto failure;
@@ -1893,7 +2077,7 @@ static int symbols_scan(CrustyVM *cvm) {
             }
 
             continue; /* don't copy in to new list */
-        } else if(strcmp(cvm->line[cvm->logline].token[0], "local") == 0) {
+        } else if(strcmp(GET_TOKEN(cvm->logline, 0), "local") == 0) {
             if(cvm->line[cvm->logline].tokencount < 2) {
                 LOG_PRINTF_LINE(cvm, "local takes a name as argument.\n");
                 goto failure;
@@ -1909,14 +2093,14 @@ static int symbols_scan(CrustyVM *cvm) {
             }
 
             continue; /* don't copy in to new list */
-        } else if(strcmp(cvm->line[cvm->logline].token[0], "stack") == 0) {
+        } else if(strcmp(GET_TOKEN(cvm->logline, 0), "stack") == 0) {
             if(cvm->line[cvm->logline].tokencount != 2) {
                 LOG_PRINTF_LINE(cvm, "stack takes a number as argument.\n");
                 goto failure;
             }
 
-            long stack = strtol(cvm->line[cvm->logline].token[1], &temp, 0);
-            if(*temp == '\0' && temp != cvm->line[cvm->logline].token[1]) {
+            long stack = strtol(GET_TOKEN(cvm->logline, 1), &temp, 0);
+            if(*temp == '\0' && temp != GET_TOKEN(cvm->logline, 1)) {
                 cvm->stacksize += stack;
             } else {
                 LOG_PRINTF_LINE(cvm, "stack takes a number as argument.\n");
@@ -1924,7 +2108,7 @@ static int symbols_scan(CrustyVM *cvm) {
             }
 
             continue; /* don't copy in to new list */
-        } else if(strcmp(cvm->line[cvm->logline].token[0], "label") == 0) {
+        } else if(strcmp(GET_TOKEN(cvm->logline, 0), "label") == 0) {
             if(cvm->line[cvm->logline].tokencount != 2) {
                 LOG_PRINTF_LINE(cvm, "label takes a name as argument.\n");
                 goto failure;
@@ -1941,7 +2125,8 @@ static int symbols_scan(CrustyVM *cvm) {
                 goto failure;
             }
             curProc->label = (CrustyLabel *)temp;
-            curProc->label[curProc->labels].name = cvm->line[cvm->logline].token[1];
+            curProc->label[curProc->labels].nameOffset =
+                cvm->line[cvm->logline].offset[1];
             curProc->label[curProc->labels].line = lines;
             curProc->labels++;
 
@@ -1949,10 +2134,15 @@ static int symbols_scan(CrustyVM *cvm) {
         }
 
         new[lines].tokencount = cvm->line[cvm->logline].tokencount;
-        new[lines].module = cvm->line[cvm->logline].module;
+        new[lines].moduleOffset = cvm->line[cvm->logline].moduleOffset;
         new[lines].line = cvm->line[cvm->logline].line;
+        new[lines].offset = malloc(sizeof(long) * new[lines].tokencount);
+        if(new[lines].offset == NULL) {
+            LOG_PRINTF_LINE(cvm, "Failed to allocate memory for line copy.\n");
+            goto failure;
+        }
         for(i = 0; i < new[lines].tokencount; i++) {
-            new[lines].token[i] = cvm->line[cvm->logline].token[i];
+            new[lines].offset[i] = cvm->line[cvm->logline].offset[i];
         }
         lines++;
     }
@@ -2032,6 +2222,9 @@ static int symbols_scan(CrustyVM *cvm) {
         goto failure;
     }
 
+    for(i = 0; i < cvm->lines; i++) {
+        free(cvm->line[i].offset);
+    }
     free(cvm->line);
     cvm->line = (CrustyLine *)temp;
     cvm->lines = lines;
@@ -2039,9 +2232,19 @@ static int symbols_scan(CrustyVM *cvm) {
     return(0);
 
 failure:
-    free(new);
+    if(new != NULL) {
+        for(i = 0; i < lines; i++) {
+            if(new[i].offset != NULL) {
+                free(new[i].offset);
+            }
+        }
+        free(new);
+    }
+
     return(-1);
 }
+
+#undef GET_TOKEN
 
 /* get a bunch of messy checks out of the way.  Many of these are wacky and
    should be impossible but may as well get as much out of the way as possible. */
@@ -3031,9 +3234,10 @@ int crustyvm_reset(CrustyVM *cvm) {
 }
 
 #ifdef CRUSTY_TEST
-static int write_lines(CrustyVM *cvm, const char *name) {
+static int write_lines(CrustyVM *cvm, const char *name, int byOffset) {
     FILE *out;
     unsigned int i, j;
+    char *temp;
 
     out = fopen(name, "wb");
     if(out == NULL) {
@@ -3043,7 +3247,12 @@ static int write_lines(CrustyVM *cvm, const char *name) {
 
     for(i = 0; i < cvm->lines; i++) {
         for(j = 0; j < cvm->line[i].tokencount; j++) {
-            if(fprintf(out, "%s", cvm->line[i].token[j]) < 0) {
+            if(byOffset) {
+                temp = &(cvm->tokenmem[cvm->line[i].offset[j]]);
+            } else {
+                temp = cvm->line[i].token[j];
+            }
+            if(fprintf(out, "%s", temp) < 0) {
                 LOG_PRINTF(cvm, "Couldn't write to file.\n");
                 return(-1);
             }
@@ -3068,7 +3277,7 @@ static int write_lines(CrustyVM *cvm, const char *name) {
 
 CrustyVM *crustyvm_new(const char *name,
                        const char *program,
-                       int len,
+                       long len,
                        unsigned int flags,
                        unsigned int callstacksize,
                        const CrustyCallback *cb,
@@ -3077,11 +3286,12 @@ CrustyVM *crustyvm_new(const char *name,
                        void *log_priv) {
     CrustyVM *cvm;
     int foundmacro;
-    unsigned int i;
+    unsigned int i, j;
     char namebuffer[] = "preprocess###.cvm";
+    long tokenstart;
 
 #ifdef CRUSTY_TEST
-    unsigned int j, k;
+    unsigned int k;
 #endif
 
     if(name == NULL) {
@@ -3097,19 +3307,6 @@ CrustyVM *crustyvm_new(const char *name,
 
     cvm->flags = flags;
 
-    /* copy program so we can mutate it if needed, add an extra byte in case the
-       last token ends on the last byte so the NUL terminator can be added to
-       the token. */
-    cvm->program = malloc(len + 1);
-    if(cvm->program == NULL) {
-        crustyvm_free(cvm);
-        return(NULL);
-    }
-    memcpy(cvm->program, program, len);
-    cvm->program[len] = '\n'; /* assure there'll never be a line not terminated
-                                 by a line ending char. */
-
-    cvm->proglen = len;
     cvm->log_cb = log_cb;
     cvm->log_priv = log_priv;
 
@@ -3118,7 +3315,7 @@ CrustyVM *crustyvm_new(const char *name,
     LOG_PRINTF(cvm, "Start\n");
 #endif
 
-    if(tokenize(cvm, name) < 0) {
+    if(tokenize(cvm, name, program, len) < 0) {
         crustyvm_free(cvm);
         return(NULL);
     }
@@ -3135,7 +3332,8 @@ CrustyVM *crustyvm_new(const char *name,
             return(NULL);
         }
 
-        if(fwrite(cvm->program, 1, cvm->proglen, out) < cvm->proglen) {
+        if(fwrite(cvm->tokenmem, 1, cvm->tokenmemlen, out) <
+           (unsigned long)cvm->tokenmemlen) {
             LOG_PRINTF(cvm, "Failed to write tokenizer output.\n");
             crustyvm_free(cvm);
             return(NULL);
@@ -3161,9 +3359,11 @@ CrustyVM *crustyvm_new(const char *name,
         }
 
         for(i = 0; i < cvm->lines; i++) {
-            fprintf(out, "%s %04u ", cvm->line[i].module, cvm->line[i].line);
+            fprintf(out, "%s %04u ",
+                    &(cvm->tokenmem[cvm->line[i].moduleOffset]),
+                    cvm->line[i].line);
             for(j = 0; j < cvm->line[i].tokencount; j++) {
-                fprintf(out, "%s", cvm->line[i].token[j]);
+                fprintf(out, "%s", &(cvm->tokenmem[cvm->line[i].offset[j]]));
                 if(j < cvm->line[i].tokencount - 1) {
                     fprintf(out, " ");
                 }
@@ -3174,7 +3374,7 @@ CrustyVM *crustyvm_new(const char *name,
     }
 
     if(cvm->flags & CRUSTY_FLAG_OUTPUT_PASSES) {
-        if(write_lines(cvm, "tokenize.cvm") < 0) {
+        if(write_lines(cvm, "tokenize.cvm", 1) < 0) {
             LOG_PRINTF(cvm, "Failed to write tokenize pass.\n");
             crustyvm_free(cvm);
             return(NULL);
@@ -3205,7 +3405,7 @@ CrustyVM *crustyvm_new(const char *name,
 #ifdef CRUSTY_TEST
         if(cvm->flags & CRUSTY_FLAG_OUTPUT_PASSES) {
             snprintf(namebuffer, sizeof(namebuffer), "preprocess%03d.cvm", i + 1);
-            if(write_lines(cvm, namebuffer) < 0) {
+            if(write_lines(cvm, namebuffer, 1) < 0) {
                 LOG_PRINTF(cvm, "Failed to write pass %d.\n", i + 1);
                 crustyvm_free(cvm);
                 return(NULL);
@@ -3234,9 +3434,16 @@ CrustyVM *crustyvm_new(const char *name,
             crustyvm_free(cvm);
             return(NULL);
         }
+
+        tokenstart = add_token(cvm, cb[i].name, strlen(cb[i].name), 0);
+        if(tokenstart < 0) {
+            LOG_PRINTF(cvm, "Failed to allocate memory for callback name.\n");
+            crustyvm_free(cvm);
+            return(NULL);
+        }
         /* callback variables have 0 length and read or write must be non-NULL */
         if(new_variable(cvm,
-                        cb[i].name,
+                        tokenstart,
                         cb[i].type,
                         cb[i].length,
                         NULL, NULL, NULL,
@@ -3265,10 +3472,40 @@ CrustyVM *crustyvm_new(const char *name,
         return(NULL);
     }
 
+    /* all tokens have been loaded in/created, so the pointers in to tokenmem
+       won't change, so token offsets can be turned in to normal char * pointers
+       and the memory used to store the offsets can be freed up */
+    for(i = 0; i < cvm->lines; i++) {
+        cvm->line[i].module = &(cvm->tokenmem[cvm->line[i].moduleOffset]);
+        cvm->line[i].token = malloc(sizeof(char *) * cvm->line[i].tokencount);
+        if(cvm->line[i].token == NULL) {
+            LOG_PRINTF(cvm, "Failed to allocate memory for token pointer list.\n");
+            crustyvm_free(cvm);
+            return(NULL);
+        }
+        for(j = 0; j < cvm->line[i].tokencount; j++) {
+            cvm->line[i].token[j] = &(cvm->tokenmem[cvm->line[i].offset[j]]);
+        }
+        free(cvm->line[i].offset);
+        cvm->line[i].offset = NULL;
+    }
+
+    for(i = 0; i < cvm->procs; i++) {
+        cvm->proc[i].name = &(cvm->tokenmem[cvm->proc[i].nameOffset]);
+        for(j = 0; j < cvm->proc[i].labels; j++) {
+            cvm->proc[i].label[j].name =
+                &(cvm->tokenmem[cvm->proc[i].label[j].nameOffset]);
+        }
+    }
+
+    for(i = 0; i < cvm->vars; i++) {
+        cvm->var[i].name = &(cvm->tokenmem[cvm->var[i].nameOffset]);
+    }
+
 #ifdef CRUSTY_TEST
     /* output a text file because it is no longer a valid cvm source file */
     if(cvm->flags & CRUSTY_FLAG_OUTPUT_PASSES) {
-        if(write_lines(cvm, "symbols scan.txt") < 0) {
+        if(write_lines(cvm, "symbols scan.txt", 0) < 0) {
             LOG_PRINTF(cvm, "Failed to write tokenize pass.\n");
             crustyvm_free(cvm);
             return(NULL);
@@ -4673,7 +4910,7 @@ int main(int argc, char **argv) {
     FILE *in = NULL;
     CrustyVM *cvm;
     char *program;
-    unsigned long len;
+    long len;
     int result;
     CrustyCallback cb[] = {
         {
@@ -4731,6 +4968,10 @@ int main(int argc, char **argv) {
     }
 
     len = ftell(in);
+    if(len < 0) {
+        fprintf(stderr, "Failed to get file length.\n");
+        goto error1;
+    }
     rewind(in);
 
     program = malloc(len);
@@ -4738,7 +4979,7 @@ int main(int argc, char **argv) {
         goto error1;
     }
 
-    if(fread(program, 1, len, in) < len) {
+    if(fread(program, 1, len, in) < (unsigned long)len) {
         fprintf(stderr, "Failed to read file.\n");
         goto error2;
     }
@@ -4756,6 +4997,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Failed to load program.\n");
         goto error2;
     }
+    free(program);
+    program = NULL;
     fprintf(stderr, "Program loaded.\n");
 
     fprintf(stderr, "Stack size: %u\n", cvm->stacksize);
@@ -4766,13 +5009,16 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Program reached an exception while running: %s\n",
                 crustyvm_statusstr(crustyvm_get_status(cvm)));
         crustyvm_debugtrace(cvm, 1);
-        goto error2;
+        goto error1;
     }
 
     fprintf(stderr, "Program completed successfully.\n");
+    crustyvm_free(cvm);
 
 error2:
-    free(program);
+    if(program != NULL) {
+        free(program);
+    }
 error1:
     if(in != NULL) {
         fclose(in);

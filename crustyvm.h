@@ -85,7 +85,7 @@ typedef struct CrustyVM_s CrustyVM;
  */
 CrustyVM *crustyvm_new(const char *name,
                        const char *program,
-                       int len,
+                       long len,
                        unsigned int flags,
                        unsigned int callstacksize,
                        const CrustyCallback *cb,

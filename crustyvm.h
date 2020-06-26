@@ -56,26 +56,29 @@ typedef struct CrustyVM_s CrustyVM;
  * callstacksize    Specify the callstack size.  This isn't the memory size but
  *                  the depth of procedures which could be called.
  * cb               Array of callbacks described by struct CrustyCallback.
-                        name        Variable name which the callback will be
-                                    called by.
-                        size        The maximum value which should be passed in
-                                    to the callback as an index.
-                        read        The function to be called on reads:
-                            priv    The private pointer provided as readpriv.
-                            val     A pointer to an integer which the value
-                                    should be set to.
-                            index   The index requested by the program, 0 if no
-                                    index is specified.
-                            returns Negative to indicate a failure.
-                        readpriv    A private pointer passed in to the read
-                                    callback.
-                        write       The function to be called on writes:
-                            priv    The private pointer provided as writepriv.
-                            val     The value passed in by the program.
-                            index   The index requested by the program, 0 if no
-                                    index is specified
-                            returns Negative to indicate a failure.
+ *                      name        Variable name which the callback will be
+ *                                  called by.
+ *                      size        The maximum value which should be passed in
+ *                                  to the callback as an index.
+ *                      read        The function to be called on reads:
+ *                          priv    The private pointer provided as readpriv.
+ *                          val     A pointer to an integer which the value
+ *                                  should be set to.
+ *                          index   The index requested by the program, 0 if no
+ *                                  index is specified.
+ *                          returns Negative to indicate a failure.
+ *                      readpriv    A private pointer passed in to the read
+ *                                  callback.
+ *                      write       The function to be called on writes:
+ *                          priv    The private pointer provided as writepriv.
+ *                          val     The value passed in by the program.
+ *                          index   The index requested by the program, 0 if no
+ *                                  index is specified
+ *                          returns Negative to indicate a failure.
  * cbcount          Number of callbacks in array.
+ * var              Array of strings to be replaced within tokens.
+ * value            Array of strings to replace strings from var in same index.
+ * vars             Indices in array.
  * log_cb           Callback for any information printed:
  *                      priv    Private pointer passed in by log_priv.
  *                      fmt     printf style format string.
@@ -90,9 +93,11 @@ CrustyVM *crustyvm_new(const char *name,
                        unsigned int callstacksize,
                        const CrustyCallback *cb,
                        unsigned int cbcount,
+                       const char **var,
+                       const char **value,
+                       unsigned int vars,
                        void (*log_cb)(void *priv, const char *fmt, ...),
                        void *log_priv);
-
 /*
  * Free memory allocated by cvm.
  *

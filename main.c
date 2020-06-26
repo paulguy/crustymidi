@@ -700,10 +700,28 @@ void free_portnames(unsigned int inports, unsigned int outports,
     }
 }
 
-/* TODO: take in defined variables on the command line and wire up passing them in */
+#define CLEAN_ARGS \
+    if(vars > 0) { \
+        for(i = 0; i < vars; i++) { \
+            free(var[i]); \
+            free(value[i]); \
+        } \
+        free(var); \
+        free(value); \
+    } \
+    vars = 0;
+
 int main(int argc, char **argv) {
     /* general stuff */
+    const char *filename = NULL;
     unsigned int i;
+    unsigned int arglen;
+    char *equals;
+    char *temp;
+    char **tempa;
+    char **var = NULL;
+    char **value = NULL;
+    unsigned int vars = 0;
     char *inportnames[MAX_PORTS];
     char *outportnames[MAX_PORTS];
 
@@ -763,19 +781,96 @@ int main(int argc, char **argv) {
         }
     };
 
-    if(argc < 2) {
-        fprintf(stderr, "USAGE: %s <filename>\n", argv[0]);
+    for(i = 1; i < (unsigned int)argc; i++) {
+        arglen = strlen(argv[i]);
+        if(arglen > 0 && argv[i][0] == '-') {
+            if(arglen > 1) {
+                if(argv[i][1] == '-') {
+                    if(filename != NULL) {
+                        filename = NULL;
+                        break;
+                    }
+                    if(i + 1 < (unsigned int)argc) {
+                        filename = argv[i + 1];
+                    }
+                    break;
+                } else if(argv[i][1] == 'D') {
+                    if(argv[i][2] == '=') {
+                        filename = NULL;
+                        break;
+                    }
+                    equals = strchr(&(argv[i][2]), '=');
+                    if(equals == NULL) {
+                        filename = NULL;
+                        break;
+                    }
+
+                    tempa = realloc(var, sizeof(char *) * (vars + 1));
+                    if(tempa == NULL) {
+                        fprintf(stderr, "Failed to allocate memory for vars list.\n");
+                        CLEAN_ARGS
+                        exit(EXIT_FAILURE);
+                    }
+                    var = tempa;
+                    tempa = realloc(value, sizeof(char *) * (vars + 1));
+                    if(tempa == NULL) {
+                        fprintf(stderr, "Failed to allocate memory for values list.\n");
+                        CLEAN_ARGS
+                        exit(EXIT_FAILURE);
+                    }
+                    value = tempa;
+                    /* difference from start, take away "-D", add space for '\0' */
+                    temp = malloc(equals - argv[i] - 2 + 1);
+                    if(temp == NULL) {
+                        fprintf(stderr, "Failed to allocate memory for var.\n");
+                        CLEAN_ARGS
+                        exit(EXIT_FAILURE);
+                    }
+                    memcpy(temp, &(argv[i][2]), equals - argv[i] - 2);
+                    temp[equals - argv[i] - 2] = '\0';
+                    var[vars] = temp;
+                    /* total length, take away the length of the first part,
+                       take away the '=', add the '\0' */
+                    temp = malloc(arglen - (equals - argv[i] - 2) - 1 + 1);
+                    if(temp == NULL) {
+                        fprintf(stderr, "Failed to allocate memory for value.\n");
+                        CLEAN_ARGS
+                        exit(EXIT_FAILURE);
+                    }
+                    memcpy(temp, &(equals[1]), arglen - (equals - argv[i] - 2) - 1);
+                    temp[arglen - (equals - argv[i] - 2) - 1] = '\0';
+                    value[vars] = temp;
+                    vars++;
+                } else {
+                    filename = NULL;
+                    break;
+                }
+            }
+        } else {
+            if(filename != NULL) {
+                filename = NULL;
+                break;
+            }
+            filename = argv[i];
+        }
+    }
+
+    if(filename == NULL) {
+        fprintf(stderr, "USAGE: %s [(<filename>|-D<var>=<value>) ...] [-- <filename>]\n", argv[0]);
+        CLEAN_ARGS
         exit(EXIT_FAILURE);
     }
 
-    in = fopen(argv[1], "rb");
+    in = fopen(filename, "rb");
     if(in == NULL) {
-        fprintf(stderr, "Failed to open file %s.\n", argv[1]);
+        fprintf(stderr, "Failed to open file %s.\n", filename);
+        CLEAN_ARGS
         exit(EXIT_FAILURE);
     }
 
     if(fseek(in, 0, SEEK_END) < 0) {
-       fprintf(stderr, "Failed to seek to end of file.\n");
+        fprintf(stderr, "Failed to seek to end of file.\n");
+        CLEAN_ARGS
         exit(EXIT_FAILURE);
     }
 
@@ -785,6 +880,7 @@ int main(int argc, char **argv) {
     program = malloc(len);
     if(program == NULL) {
         fclose(in);
+        CLEAN_ARGS
         exit(EXIT_FAILURE);
     }
 
@@ -792,6 +888,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Failed to read file.\n");
         fclose(in);
         free(program);
+        CLEAN_ARGS
         exit(EXIT_FAILURE);
     }
 
@@ -804,6 +901,7 @@ int main(int argc, char **argv) {
         free_portnames(tctx.inports, tctx.outports,
                        inportnames,  outportnames);
         free(program);
+        CLEAN_ARGS
         exit(EXIT_FAILURE);
     }
 
@@ -812,8 +910,10 @@ int main(int argc, char **argv) {
                             /* | CRUSTY_FLAG_TRACE */,
                             0,
                             cb, sizeof(cb) / sizeof(CrustyCallback),
+                            (const char **)var, (const char **)value, vars,
                             vprintf_cb, stderr);
     free(program);
+    CLEAN_ARGS
     if(tctx.cvm == NULL) {
         fprintf(stderr, "Failed to load program.\n");
         free_portnames(tctx.inports, tctx.outports,

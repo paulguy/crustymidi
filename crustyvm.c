@@ -216,7 +216,22 @@ typedef enum {
     CRUSTY_EXPR_PLUS,
     CRUSTY_EXPR_MINUS,
     CRUSTY_EXPR_MULTIPLY,
-    CRUSTY_EXPR_DIVIDE
+    CRUSTY_EXPR_DIVIDE,
+    CRUSTY_EXPR_MODULO,
+    CRUSTY_EXPR_EQUALS,
+    CRUSTY_EXPR_NEQUALS,
+    CRUSTY_EXPR_LESS,
+    CRUSTY_EXPR_GREATER,
+    CRUSTY_EXPR_LEQUALS,
+    CRUSTY_EXPR_GEQUALS,
+    CRUSTY_EXPR_AND,
+    CRUSTY_EXPR_OR,
+    CRUSTY_EXPR_XOR,
+    CRUSTY_EXPR_NAND,
+    CRUSTY_EXPR_NOR,
+    CRUSTY_EXPR_XNOR,
+    CRUSTY_EXPR_LSHIFT,
+    CRUSTY_EXPR_RSHIFT
 } CrustyExprOp;
 
 typedef struct CrustyExpr_s {
@@ -262,6 +277,7 @@ static CrustyVM *init() {
     cvm->inst = NULL;
     cvm->insts = 0;
     cvm->stack = NULL;
+    cvm->cstack = NULL;
 
     return(cvm);
 }
@@ -323,13 +339,18 @@ void crustyvm_free(CrustyVM *cvm) {
         free(cvm->stack);
     }
 
+    if(cvm->cstack != NULL) {
+        free(cvm->cstack);
+    }
+
     free(cvm);
 }
 
 static long add_token(CrustyVM *cvm,
                      const char *token,
                      unsigned long len,
-                     int quoted) {
+                     int quoted,
+                     unsigned int *line) {
     char *temp;
     unsigned long oldlen;
     unsigned long srcpos, destpos;
@@ -374,6 +395,8 @@ static long add_token(CrustyVM *cvm,
                                token[srcpos + 1] == '\r') {
                                 srcpos++;
                             }
+                            /* increment line count passed in */
+                            (*line)++;
                             break;
                         case '\r':
                             /* same as above */
@@ -391,6 +414,10 @@ static long add_token(CrustyVM *cvm,
                             return(-1);
                     }
                 } else {
+                    if(token[srcpos] == '\n') {
+                        /* same */
+                        (*line)++;
+                    }
                     temp[destpos] = token[srcpos];
                     destpos++;
                 }
@@ -434,7 +461,7 @@ static long add_token(CrustyVM *cvm,
 #define LOG_PRINTF_TOK(CVM, FMT, ...) \
     (CVM)->log_cb((CVM)->log_priv, "%s:%s:%u: " FMT, \
         (CVM)->stage, \
-        MODULE, \
+        &((CVM)->tokenmem[MODULE]), \
         LINE, \
         ##__VA_ARGS__)
 
@@ -468,8 +495,8 @@ static int tokenize(CrustyVM *cvm,
 
     PROGRAM = programdata;
     LEN = programdatalen;
-    tokenstart = add_token(cvm, modulename, strlen(modulename), 0);
-    if(tokenstart == -1) {
+    tokenstart = add_token(cvm, modulename, strlen(modulename), 0, NULL);
+    if(tokenstart < 0) {
         LOG_PRINTF(cvm, "Failed to allocate memory for module name.\n");
         return(-1);
     }
@@ -614,8 +641,9 @@ static int tokenize(CrustyVM *cvm,
                 tokenstart = add_token(cvm,
                                        &(PROGRAM[tokenstart]),
                                        POS + cursor - tokenstart,
-                                       0);
-                if(tokenstart == -1) {
+                                       0,
+                                       NULL);
+                if(tokenstart < 0) {
                     LOG_PRINTF_TOK(cvm, "Couldn't allocate memory for token.\n");
                     return(-1);
                 }
@@ -632,8 +660,9 @@ static int tokenize(CrustyVM *cvm,
                     tokenstart = add_token(cvm,
                                            &(PROGRAM[tokenstart]),
                                            POS + cursor - tokenstart,
-                                           1 /* quoted */);
-                    if(tokenstart == -1) {
+                                           1, /* quoted */
+                                           &(LINE));
+                    if(tokenstart < 0) {
                         LOG_PRINTF_TOK(cvm, "Couldn't allocate memory for token.\n");
                         return(-1);
                     }
@@ -706,11 +735,14 @@ static int tokenize(CrustyVM *cvm,
                 if(fread((char *)(includestack[includestackptr+1]),
                          1,
                          includesize[includestackptr+1],
-                         in) < includesize[includestackptr]) {
+                         in) < includesize[includestackptr+1]) {
                     LOG_PRINTF_TOK(cvm, "Failed to read include file.\n");
                     return(-1);
                 }
                 fclose(in);
+
+                /* go past the include line */
+                POS += linelen;
 
                 /* add the module name */
                 includestackptr++;
@@ -725,7 +757,6 @@ static int tokenize(CrustyVM *cvm,
                 cvm->lines[cvm->line].offset = NULL;
 
                 /* don't advance line count */
-                POS += linelen;
                 continue;
             } else { /* no include, so just advance things normal */
                 POS += linelen;
@@ -751,12 +782,22 @@ static int tokenize(CrustyVM *cvm,
     return(0);
 }
 
-#undef LINE_PRINTF_TOK
+#undef LOG_PRINTF_TOK
 #undef LINE
 #undef MODULE
 #undef LEN
 #undef PROGRAM
 #undef ISJUNK
+
+/* next block of functions related to preprocessing also need a special version
+   of LOG_PRINTF_LINE as well by fetching module names from the token memory
+   offset because the char pointers aren't set up in cvm->line yet. */
+#define LOG_PRINTF_TOK(CVM, FMT, ...) \
+    (CVM)->log_cb((CVM)->log_priv, "%s:%s:%u: " FMT, \
+        (CVM)->stage, \
+        &((CVM)->tokenmem[(CVM)->line[(CVM)->logline].moduleOffset]), \
+        (CVM)->line[(CVM)->logline].line, \
+        ##__VA_ARGS__)
 
 static CrustyMacro *find_macro(CrustyVM *cvm,
                                CrustyMacro *macro,
@@ -821,7 +862,7 @@ static long string_replace(CrustyVM *cvm,
     newlen = tokenlen - (macrolen * macrofound) + (strlen(replace) * macrofound);
 
     /* will return an index in to a null terminated buffer long enough for newlen */
-    tokenstart = add_token(cvm, NULL, newlen, 0);
+    tokenstart = add_token(cvm, NULL, newlen, 0, NULL);
     if(tokenstart < 0) {
         LOG_PRINTF(cvm, "Failed to add string replace memory to extra memory.\n");
         return(-1);
@@ -859,7 +900,11 @@ static long string_replace(CrustyVM *cvm,
     return(tokenstart);
 }
 
-
+/* I wrote this kinda crappily, and when adding a bunch more operators it got
+   extra crappy.  I probably won't rewrite it because i'd have to basically
+   either figure out what I did or just rewrite it from scratch to be less silly
+   but it probably doesn't really matter.  It won't be noticeably slow for any
+   program written in this, and it doesn't affect runtime speed whatsoever. */
 static CrustyExpr *do_expression(CrustyVM *cvm, CrustyExpr *expr) {
     CrustyExpr *cursor;
     CrustyExpr *innercursor;
@@ -883,7 +928,7 @@ static CrustyExpr *do_expression(CrustyVM *cvm, CrustyExpr *expr) {
                 }
             }
             if(cursor->next == innercursor) {
-                LOG_PRINTF_LINE(cvm, "Empty parentheses in evaluation.\n");
+                LOG_PRINTF_TOK(cvm, "Empty parentheses in evaluation.\n");
                 return(NULL);
             }
             /* evaluate the inner expression in isolation */
@@ -924,32 +969,38 @@ static CrustyExpr *do_expression(CrustyVM *cvm, CrustyExpr *expr) {
        the first place and eval should start with a number, alternate between an
        operation and a number until terminating on a number */
 
+    /* operation precedence based on C, described from:
+       https://en.cppreference.com/w/c/language/operator_precedence */
+
     /* multiplication and division */
     cursor = expr;
     while(cursor != NULL) {
         if(cursor->op == CRUSTY_EXPR_MULTIPLY ||
-           cursor->op == CRUSTY_EXPR_DIVIDE) {
+           cursor->op == CRUSTY_EXPR_DIVIDE ||
+           cursor->op == CRUSTY_EXPR_MODULO) {
             if(cursor->prev == NULL) {
-                LOG_PRINTF_LINE(cvm, "Operator with nothing before.\n");
+                LOG_PRINTF_TOK(cvm, "Operator with nothing before.\n");
                 return(NULL);
             }
             if(cursor->prev->op != CRUSTY_EXPR_NUMBER) {
-                LOG_PRINTF_LINE(cvm, "Operator with not a number before.\n");
+                LOG_PRINTF_TOK(cvm, "Operator with not a number before.\n");
                 return(NULL);
             }
             if(cursor->next == NULL) {
-                LOG_PRINTF_LINE(cvm, "Operator with nothing after.\n");
+                LOG_PRINTF_TOK(cvm, "Operator with nothing after.\n");
                 return(NULL);
             }
             if(cursor->next->op != CRUSTY_EXPR_NUMBER) {
-                LOG_PRINTF_LINE(cvm, "Operator with not a number after.\n");
+                LOG_PRINTF_TOK(cvm, "Operator with not a number after.\n");
                 return(NULL);
             }
 
             if(cursor->op == CRUSTY_EXPR_MULTIPLY) {
                 cursor->prev->number = cursor->prev->number * cursor->next->number;
-            } else {
+            } else if(cursor->op == CRUSTY_EXPR_DIVIDE) {
                 cursor->prev->number = cursor->prev->number / cursor->next->number;
+            } else {
+                cursor->prev->number = cursor->prev->number % cursor->next->number;
             }
 
             /* the operator and second operand are unimportant now so move the
@@ -970,19 +1021,19 @@ static CrustyExpr *do_expression(CrustyVM *cvm, CrustyExpr *expr) {
         if(cursor->op == CRUSTY_EXPR_PLUS ||
            cursor->op == CRUSTY_EXPR_MINUS) {
             if(cursor->prev == NULL) {
-                LOG_PRINTF_LINE(cvm, "Operator with nothing before.\n");
+                LOG_PRINTF_TOK(cvm, "Operator with nothing before.\n");
                 return(NULL);
             }
             if(cursor->prev->op != CRUSTY_EXPR_NUMBER) {
-                LOG_PRINTF_LINE(cvm, "Operator with not a number before.\n");
+                LOG_PRINTF_TOK(cvm, "Operator with not a number before.\n");
                 return(NULL);
             }
             if(cursor->next == NULL) {
-                LOG_PRINTF_LINE(cvm, "Operator with nothing after.\n");
+                LOG_PRINTF_TOK(cvm, "Operator with nothing after.\n");
                 return(NULL);
             }
             if(cursor->next->op != CRUSTY_EXPR_NUMBER) {
-                LOG_PRINTF_LINE(cvm, "Operator with not a number after.\n");
+                LOG_PRINTF_TOK(cvm, "Operator with not a number after.\n");
                 return(NULL);
             }
 
@@ -1004,9 +1055,255 @@ static CrustyExpr *do_expression(CrustyVM *cvm, CrustyExpr *expr) {
         cursor = cursor->next;
     }
 
+    /* bit shift */
+    cursor = expr;
+    while(cursor != NULL) {
+        if(cursor->op == CRUSTY_EXPR_LSHIFT ||
+           cursor->op == CRUSTY_EXPR_RSHIFT) {
+            if(cursor->prev == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing before.\n");
+                return(NULL);
+            }
+            if(cursor->prev->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number before.\n");
+                return(NULL);
+            }
+            if(cursor->next == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing after.\n");
+                return(NULL);
+            }
+            if(cursor->next->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number after.\n");
+                return(NULL);
+            }
+
+            if(cursor->op == CRUSTY_EXPR_LSHIFT) {
+                cursor->prev->number = cursor->prev->number << cursor->next->number;
+            } else {
+                cursor->prev->number = cursor->prev->number >> cursor->next->number;
+            }
+
+            /* the operator and second operand are unimportant now so move the
+               context to the result value and repoint it to the value following
+               the second operand */
+            cursor = cursor->prev;
+            cursor->next = cursor->next->next->next;
+            if(cursor->next != NULL) {
+                cursor->next->prev = cursor;
+            }
+        }
+        cursor = cursor->next;
+    }
+
+    /* less than (or equal) and greater than (or equal) */
+    cursor = expr;
+    while(cursor != NULL) {
+        if(cursor->op == CRUSTY_EXPR_LESS ||
+           cursor->op == CRUSTY_EXPR_LEQUALS ||
+           cursor->op == CRUSTY_EXPR_GREATER ||
+           cursor->op == CRUSTY_EXPR_GEQUALS) {
+            if(cursor->prev == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing before.\n");
+                return(NULL);
+            }
+            if(cursor->prev->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number before.\n");
+                return(NULL);
+            }
+            if(cursor->next == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing after.\n");
+                return(NULL);
+            }
+            if(cursor->next->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number after.\n");
+                return(NULL);
+            }
+
+            if(cursor->op == CRUSTY_EXPR_LESS) {
+                cursor->prev->number = (cursor->prev->number < cursor->next->number);
+            } else if(cursor->op == CRUSTY_EXPR_LEQUALS) {
+                cursor->prev->number = (cursor->prev->number <= cursor->next->number);
+            } else if(cursor->op == CRUSTY_EXPR_GREATER) {
+                cursor->prev->number = (cursor->prev->number > cursor->next->number);
+            } else {
+                cursor->prev->number = (cursor->prev->number >= cursor->next->number);
+            }
+
+            /* the operator and second operand are unimportant now so move the
+               context to the result value and repoint it to the value following
+               the second operand */
+            cursor = cursor->prev;
+            cursor->next = cursor->next->next->next;
+            if(cursor->next != NULL) {
+                cursor->next->prev = cursor;
+            }
+        }
+        cursor = cursor->next;
+    }
+
+    /* equal to and not equal to */
+    cursor = expr;
+    while(cursor != NULL) {
+        if(cursor->op == CRUSTY_EXPR_EQUALS ||
+           cursor->op == CRUSTY_EXPR_NEQUALS) {
+            if(cursor->prev == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing before.\n");
+                return(NULL);
+            }
+            if(cursor->prev->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number before.\n");
+                return(NULL);
+            }
+            if(cursor->next == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing after.\n");
+                return(NULL);
+            }
+            if(cursor->next->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number after.\n");
+                return(NULL);
+            }
+
+            if(cursor->op == CRUSTY_EXPR_EQUALS) {
+                cursor->prev->number = (cursor->prev->number == cursor->next->number);
+            } else {
+                cursor->prev->number = (cursor->prev->number != cursor->next->number);
+            }
+
+            /* the operator and second operand are unimportant now so move the
+               context to the result value and repoint it to the value following
+               the second operand */
+            cursor = cursor->prev;
+            cursor->next = cursor->next->next->next;
+            if(cursor->next != NULL) {
+                cursor->next->prev = cursor;
+            }
+        }
+        cursor = cursor->next;
+    }
+
+    /* and and nand */
+    cursor = expr;
+    while(cursor != NULL) {
+        if(cursor->op == CRUSTY_EXPR_AND ||
+           cursor->op == CRUSTY_EXPR_NAND) {
+            if(cursor->prev == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing before.\n");
+                return(NULL);
+            }
+            if(cursor->prev->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number before.\n");
+                return(NULL);
+            }
+            if(cursor->next == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing after.\n");
+                return(NULL);
+            }
+            if(cursor->next->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number after.\n");
+                return(NULL);
+            }
+
+            if(cursor->op == CRUSTY_EXPR_AND) {
+                cursor->prev->number = cursor->prev->number & cursor->next->number;
+            } else {
+                cursor->prev->number = ~(cursor->prev->number & cursor->next->number);
+            }
+
+            /* the operator and second operand are unimportant now so move the
+               context to the result value and repoint it to the value following
+               the second operand */
+            cursor = cursor->prev;
+            cursor->next = cursor->next->next->next;
+            if(cursor->next != NULL) {
+                cursor->next->prev = cursor;
+            }
+        }
+        cursor = cursor->next;
+    }
+
+    /* or and nor */
+    cursor = expr;
+    while(cursor != NULL) {
+        if(cursor->op == CRUSTY_EXPR_OR ||
+           cursor->op == CRUSTY_EXPR_NOR) {
+            if(cursor->prev == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing before.\n");
+                return(NULL);
+            }
+            if(cursor->prev->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number before.\n");
+                return(NULL);
+            }
+            if(cursor->next == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing after.\n");
+                return(NULL);
+            }
+            if(cursor->next->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number after.\n");
+                return(NULL);
+            }
+
+            if(cursor->op == CRUSTY_EXPR_OR) {
+                cursor->prev->number = cursor->prev->number | cursor->next->number;
+            } else {
+                cursor->prev->number = ~(cursor->prev->number | cursor->next->number);
+            }
+
+            /* the operator and second operand are unimportant now so move the
+               context to the result value and repoint it to the value following
+               the second operand */
+            cursor = cursor->prev;
+            cursor->next = cursor->next->next->next;
+            if(cursor->next != NULL) {
+                cursor->next->prev = cursor;
+            }
+        }
+        cursor = cursor->next;
+    }
+
+    /* xor and xnor */
+    cursor = expr;
+    while(cursor != NULL) {
+        if(cursor->op == CRUSTY_EXPR_XOR ||
+           cursor->op == CRUSTY_EXPR_XNOR) {
+            if(cursor->prev == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing before.\n");
+                return(NULL);
+            }
+            if(cursor->prev->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number before.\n");
+                return(NULL);
+            }
+            if(cursor->next == NULL) {
+                LOG_PRINTF_TOK(cvm, "Operator with nothing after.\n");
+                return(NULL);
+            }
+            if(cursor->next->op != CRUSTY_EXPR_NUMBER) {
+                LOG_PRINTF_TOK(cvm, "Operator with not a number after.\n");
+                return(NULL);
+            }
+
+            if(cursor->op == CRUSTY_EXPR_XOR) {
+                cursor->prev->number = cursor->prev->number ^ cursor->next->number;
+            } else {
+                cursor->prev->number = ~(cursor->prev->number ^ cursor->next->number);
+            }
+
+            /* the operator and second operand are unimportant now so move the
+               context to the result value and repoint it to the value following
+               the second operand */
+            cursor = cursor->prev;
+            cursor->next = cursor->next->next->next;
+            if(cursor->next != NULL) {
+                cursor->next->prev = cursor;
+            }
+        }
+        cursor = cursor->next;
+    }
+
     /* at this point, everything should be collapsed in to one lone value */
     if(expr->prev != NULL || expr->next != NULL) {
-        LOG_PRINTF_LINE(cvm, "Expression didn't evaluate down to a single number.\n");
+        LOG_PRINTF_TOK(cvm, "Expression didn't evaluate down to a single number.\n");
         return(NULL);
     }
 
@@ -1022,7 +1319,7 @@ static CrustyExpr *add_expr(CrustyVM *cvm,
     CrustyExpr *expr;
     expr = realloc(buffer, sizeof(CrustyExpr) * (*len + 1));
     if(expr == NULL) {
-        LOG_PRINTF_LINE(cvm, "Failed to allocate memory for CrustyExpr.\n");
+        LOG_PRINTF_TOK(cvm, "Failed to allocate memory for CrustyExpr.\n");
         return(NULL);
     }
 
@@ -1035,35 +1332,8 @@ static CrustyExpr *add_expr(CrustyVM *cvm,
 }
 
 #define ISJUNK(X) ((X) == ' ' || (X) == '\t')
-#define PRINT_EXPR(EXPR) \
-    switch((EXPR).op) { \
-        case CRUSTY_EXPR_NUMBER: \
-            fprintf(stderr, "%d ", (EXPR).number); \
-            break; \
-        case CRUSTY_EXPR_LPAREN: \
-            fprintf(stderr, "( "); \
-            break; \
-        case CRUSTY_EXPR_RPAREN: \
-            fprintf(stderr, ") "); \
-            break; \
-        case CRUSTY_EXPR_PLUS: \
-            fprintf(stderr, "+ "); \
-            break; \
-        case CRUSTY_EXPR_MINUS: \
-            fprintf(stderr, "- "); \
-            break; \
-        case CRUSTY_EXPR_MULTIPLY: \
-            fprintf(stderr, "* "); \
-            break; \
-        case CRUSTY_EXPR_DIVIDE: \
-            fprintf(stderr, "/ "); \
-            break; \
-        default: \
-            fprintf(stderr, "? "); \
-    }
 
 /* this is all awful and probably a horrible, inefficient way to do this but I don't know a better way */
-/* TODO: more operators, like comparison and bit ops */
 static long evaluate_expr(CrustyVM *cvm, const char *expression) {
     CrustyExpr *expr = NULL;
     int exprmem = 0;
@@ -1116,6 +1386,7 @@ static long evaluate_expr(CrustyVM *cvm, const char *expression) {
                   new != NULL &&
                   (new->op == CRUSTY_EXPR_NUMBER ||
                    new->op == CRUSTY_EXPR_RPAREN)) {
+            /* see above */
             temp = add_expr(cvm, CRUSTY_EXPR_MINUS, 0, expr, &exprmem, &new);
             if(temp == NULL) {
                 goto error;
@@ -1129,6 +1400,148 @@ static long evaluate_expr(CrustyVM *cvm, const char *expression) {
             expr = temp;
         } else if(expression[i] == '/') {
             temp = add_expr(cvm, CRUSTY_EXPR_DIVIDE, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+        } else if(expression[i] == '%') {
+            temp = add_expr(cvm, CRUSTY_EXPR_MODULO, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+        } else if(expression[i] == '=') {
+            if(i + 1 < exprlen) {
+                if(expression[i + 1] == '=') {
+                    temp = add_expr(cvm, CRUSTY_EXPR_EQUALS, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                    i++;
+                } else {
+                    LOG_PRINTF_TOK(cvm, "Invalid operator: =%c\n", expression[i + 1]);
+                    goto error;
+                }
+            } else {
+                LOG_PRINTF_TOK(cvm, "Invalid operator: =\n");
+                goto error;
+            }
+        } else if(expression[i] == '<') {
+            if(i + 1 < exprlen) {
+                if(expression[i + 1] == '=') {
+                    temp = add_expr(cvm, CRUSTY_EXPR_LEQUALS, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                    i++;
+                } else if(expression[i + 1] == '<') {
+                    temp = add_expr(cvm, CRUSTY_EXPR_LSHIFT, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                    i++;
+                } else if(ISJUNK(expression[i + 1])) {
+                    temp = add_expr(cvm, CRUSTY_EXPR_LESS, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                } else {
+                    LOG_PRINTF_TOK(cvm, "Invalid operator: <%c\n", expression[i + 1]);
+                    goto error;
+                }
+            } else {
+                LOG_PRINTF_TOK(cvm, "Operator at end of expression: <\n");
+                goto error;
+            }            
+        } else if(expression[i] == '>') {
+            if(i + 1 < exprlen) {
+                if(expression[i + 1] == '=') {
+                    temp = add_expr(cvm, CRUSTY_EXPR_GEQUALS, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                    i++;
+                } else if(expression[i + 1] == '>') {
+                    temp = add_expr(cvm, CRUSTY_EXPR_RSHIFT, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                    i++;
+                } else if(ISJUNK(expression[i + 1])) {
+                    temp = add_expr(cvm, CRUSTY_EXPR_GREATER, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                } else {
+                    LOG_PRINTF_TOK(cvm, "Invalid operator: >%c\n", expression[i + 1]);
+                    goto error;
+                }
+            } else {
+                LOG_PRINTF_TOK(cvm, "Operator at end of expression: >\n");
+                goto error;
+            }            
+        } else if(expression[i] == '!') {
+            if(i + 1 < exprlen) {
+                if(expression[i + 1] == '=') {
+                    temp = add_expr(cvm, CRUSTY_EXPR_NEQUALS, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                    i++;
+                } else if(expression[i + 1] == '&') {
+                    temp = add_expr(cvm, CRUSTY_EXPR_NAND, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                    i++;
+                } else if(expression[i + 1] == '|') {
+                    temp = add_expr(cvm, CRUSTY_EXPR_NOR, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                    i++;
+                } else if(expression[i + 1] == '^') {
+                    temp = add_expr(cvm, CRUSTY_EXPR_XNOR, 0, expr, &exprmem, &new);
+                    if(temp == NULL) {
+                        goto error;
+                    }
+                    expr = temp;
+                    i++;
+                } else if(ISJUNK(expression[i + 1])) {
+                    LOG_PRINTF_TOK(cvm, "Invalid operator: !\n");
+                    goto error;
+                } else {
+                    LOG_PRINTF_TOK(cvm, "Invalid operator: !%c\n", expression[i + 1]);
+                    goto error;
+                }
+            } else {
+                LOG_PRINTF_TOK(cvm, "Invalid operator: !\n");
+                goto error;
+            }            
+        } else if(expression[i] == '&') {
+            temp = add_expr(cvm, CRUSTY_EXPR_AND, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+        } else if(expression[i] == '|') {
+            temp = add_expr(cvm, CRUSTY_EXPR_OR, 0, expr, &exprmem, &new);
+            if(temp == NULL) {
+                goto error;
+            }
+            expr = temp;
+        } else if(expression[i] == '^') {
+            temp = add_expr(cvm, CRUSTY_EXPR_NOR, 0, expr, &exprmem, &new);
             if(temp == NULL) {
                 goto error;
             }
@@ -1167,12 +1580,12 @@ static long evaluate_expr(CrustyVM *cvm, const char *expression) {
     }
     /* fprintf(stderr, "\n"); */
     if(parens != 0) {
-        LOG_PRINTF_LINE(cvm, "Unmatched parentheses.\n");
+        LOG_PRINTF_TOK(cvm, "Unmatched parentheses.\n");
         goto error;
     }
 
     if(exprmem == 0) {
-        LOG_PRINTF_LINE(cvm, "No expression tokens found.\n");
+        LOG_PRINTF_TOK(cvm, "No expression tokens found.\n");
         goto error;
     }
 
@@ -1200,16 +1613,16 @@ static long evaluate_expr(CrustyVM *cvm, const char *expression) {
     /* create the string containing the evaluated value */
     valsize = snprintf(NULL, 0, "%d", temp->number);
     /* returned buffer is already null terminated and large enough to fit valsize */
-    tokenstart = add_token(cvm, NULL, valsize, 0);
+    tokenstart = add_token(cvm, NULL, valsize, 0, NULL);
     if(tokenstart < 0) {
-        LOG_PRINTF_LINE(cvm, "Failed to allocate memory for expression value string.\n");
+        LOG_PRINTF_TOK(cvm, "Failed to allocate memory for expression value string.\n");
         goto error;
     }
     if(snprintf(&(cvm->tokenmem[tokenstart]),
                 valsize + 1,
                 "%d",
                 temp->number) != valsize) {
-        LOG_PRINTF_LINE(cvm, "Failed to write expression value in to string.\n");
+        LOG_PRINTF_TOK(cvm, "Failed to write expression value in to string.\n");
         goto error;
     }
     free(expr);
@@ -1273,8 +1686,10 @@ static int valid_instruction(const char *name) {
 #define GET_VALUE(VAL) (&(cvm->tokenmem[values[VAL]]))
 #define GET_MACRO_STACK_NAME(PTR) (&(cvm->tokenmem[macrostack[PTR]->nameOffset]))
 
-/* TODO: add a way to pass in defines */
-static int preprocess(CrustyVM *cvm) {
+static int preprocess(CrustyVM *cvm,
+                      const unsigned long *inVar,
+                      const unsigned long *inValue,
+                      unsigned int inVars) {
     unsigned int i, j;
     CrustyLine *new = NULL;
     unsigned int mem;
@@ -1314,7 +1729,7 @@ static int preprocess(CrustyVM *cvm) {
         }
         active.offset = malloc(sizeof(long) * cvm->line[cvm->logline].tokencount);
         if(active.offset == NULL) {
-            LOG_PRINTF_LINE(cvm, "Failed to allocate memory for active token arguments.");
+            LOG_PRINTF_TOK(cvm, "Failed to allocate memory for active token arguments.");
             goto failure;
         }
         /* make mutable active line */
@@ -1333,6 +1748,18 @@ static int preprocess(CrustyVM *cvm) {
             /* replace any tokens with tokens containing any possible macro
                replacement values */
             for(i = 0; i < active.tokencount; i++) {
+                active.offset[i] = cvm->line[cvm->logline].offset[i];
+                for(j = 0; j < inVars; j++) {
+                    tokenstart = string_replace(cvm,
+                                                active.offset[i],
+                                                inVar[j],
+                                                inValue[j]);
+                    if(tokenstart < 0) {
+                        /* reason will have already been printed */
+                        goto failure;
+                    }
+                    active.offset[i] = tokenstart;
+                }
                 if((macrostackptr >= 0 && macrostack[macrostackptr]->argcount > 0)) {
                     for(j = 0; j < macrostack[macrostackptr]->argcount; j++) {
                         /* function will just pass back the token passed to
@@ -1341,21 +1768,19 @@ static int preprocess(CrustyVM *cvm) {
                            and update the length and return it. */
                         tokenstart =
                             string_replace(cvm,
-                                           cvm->line[cvm->logline].offset[i],
+                                           active.offset[i],
                                            macrostack[macrostackptr]->argOffset[j],
                                            macroargs[macrostackptr][j]);
-                        if(tokenstart == -1) {
+                        if(tokenstart < 0) {
                             /* reason will have already been printed */
                             goto failure;
                         }
                         active.offset[i] = tokenstart;
                     }
-                } else {
-                    active.offset[i] = cvm->line[cvm->logline].offset[i];
                 }
                 for(j = 0; j < varcount; j++) {
                     tokenstart = string_replace(cvm, active.offset[i], vars[j], values[j]);
-                    if(tokenstart == -1) {
+                    if(tokenstart < 0) {
                         /* reason will have already been printed */
                         goto failure;
                     }
@@ -1369,7 +1794,7 @@ static int preprocess(CrustyVM *cvm) {
                                       within other macros, which will be
                                       evaluated on subsequent passes. */
                 if(active.tokencount < 2) {
-                    LOG_PRINTF_LINE(cvm, "Macros must at least be defined with a name.\n");
+                    LOG_PRINTF_TOK(cvm, "Macros must at least be defined with a name.\n");
                     goto failure;
                 }
 
@@ -1380,7 +1805,7 @@ static int preprocess(CrustyVM *cvm) {
                 if(curmacro == NULL) {
                     curmacro = realloc(macro, sizeof(CrustyMacro) * (macrocount + 1));
                     if(curmacro == NULL) {
-                        LOG_PRINTF_LINE(cvm, "Failed to allocate memory for macro.\n");
+                        LOG_PRINTF_TOK(cvm, "Failed to allocate memory for macro.\n");
                         goto failure;
                     }
                     macro = curmacro;
@@ -1391,7 +1816,7 @@ static int preprocess(CrustyVM *cvm) {
                 curmacro->argcount = active.tokencount - 2;
                 curmacro->argOffset = malloc(sizeof(long) * curmacro->argcount);
                 if(curmacro->argOffset == NULL) {
-                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory for macro args list.\n");
+                    LOG_PRINTF_TOK(cvm, "Failed to allocate memory for macro args list.\n");
                     free(curmacro);
                     goto failure;
                 }
@@ -1411,7 +1836,7 @@ static int preprocess(CrustyVM *cvm) {
             }
         } else if(strcmp(GET_ACTIVE(0), "endmacro") == 0) {
             if(active.tokencount != 2) {
-                LOG_PRINTF_LINE(cvm, "endmacro takes a name.\n");
+                LOG_PRINTF_TOK(cvm, "endmacro takes a name.\n");
                 goto failure;
             }
 
@@ -1445,7 +1870,7 @@ static int preprocess(CrustyVM *cvm) {
                    replaced the first argument so we just need to determine
                    whather it's a number and whether it's not 0 */
                 if(active.tokencount < 3) {
-                    LOG_PRINTF_LINE(cvm,
+                    LOG_PRINTF_TOK(cvm,
                         "if takes a variable and at least 1 more argument.\n");
                     goto failure;
                 }
@@ -1473,21 +1898,21 @@ static int preprocess(CrustyVM *cvm) {
                                       may be within macros, which will be
                                       evaluated on subsequent passes. */
                 if(active.tokencount != 3) {
-                    LOG_PRINTF_LINE(cvm,
+                    LOG_PRINTF_TOK(cvm,
                         "expr takes a variable name and an expression.\n");
                     goto failure;
                 }
 
                 temp = realloc(vars, sizeof(long) * (varcount + 1));
                 if(temp == NULL) {
-                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory.\n");
+                    LOG_PRINTF_TOK(cvm, "Failed to allocate memory for expr var.\n");
                     goto failure;
                 }
                 vars = (long *)temp;
 
                 temp = realloc(values, sizeof(long) * (varcount + 1));
                 if(temp == NULL) {
-                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory.\n");
+                    LOG_PRINTF_TOK(cvm, "Failed to allocate memory for expr value.\n");
                     goto failure;
                 }
                 values = (long *)temp;
@@ -1495,7 +1920,7 @@ static int preprocess(CrustyVM *cvm) {
                 vars[varcount] = active.offset[1];
                 values[varcount] = evaluate_expr(cvm, GET_ACTIVE(2));
                 if(values[varcount] < 0) {
-                    LOG_PRINTF_LINE(cvm, "Expression evaluation failed.\n");
+                    LOG_PRINTF_TOK(cvm, "Expression evaluation failed.\n");
                     goto failure;
                 }
                 varcount++;
@@ -1509,7 +1934,7 @@ static int preprocess(CrustyVM *cvm) {
                while writing out */
             if(curmacro == NULL) {
                 if(macrostackptr == MACRO_STACK_SIZE - 1) {
-                    LOG_PRINTF_LINE(cvm, "Macro stack filled.\n");
+                    LOG_PRINTF_TOK(cvm, "Macro stack filled.\n");
                 }
 
                 macrostack[macrostackptr + 1] = find_macro(cvm,
@@ -1517,19 +1942,19 @@ static int preprocess(CrustyVM *cvm) {
                                                            macrocount,
                                                            GET_ACTIVE(0));
                 if(macrostack[macrostackptr + 1] == NULL) {
-                    LOG_PRINTF_LINE(cvm, "Invalid keyword or macro not found: %s.\n",
+                    LOG_PRINTF_TOK(cvm, "Invalid keyword or macro not found: %s.\n",
                                     GET_ACTIVE(0));
                     goto failure;
                 }
 
                 if(macrostack[macrostackptr + 1] == curmacro) {
-                    LOG_PRINTF_LINE(cvm, "Macro called recursively: %s.\n",
+                    LOG_PRINTF_TOK(cvm, "Macro called recursively: %s.\n",
                                     &(cvm->tokenmem[curmacro->nameOffset]));
                     goto failure;
                 }
                 if(active.tokencount - 1 !=
                    macrostack[macrostackptr + 1]->argcount) {
-                    LOG_PRINTF_LINE(cvm, "Wrong number of arguments to macro: "
+                    LOG_PRINTF_TOK(cvm, "Wrong number of arguments to macro: "
                                          "got %d, expected %d.\n",
                                active.tokencount - 1,
                                macrostack[macrostackptr + 1]->argcount);
@@ -1540,7 +1965,7 @@ static int preprocess(CrustyVM *cvm) {
                 macroargs[macrostackptr] =
                     malloc(sizeof(long) * macrostack[macrostackptr]->argcount);
                 if(macroargs[macrostackptr] == NULL) {
-                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory for macro args.\n");
+                    LOG_PRINTF_TOK(cvm, "Failed to allocate memory for macro args.\n");
                     goto failure;
                 }
                 for(i = 0; i < macrostack[macrostackptr]->argcount; i++) {
@@ -1559,7 +1984,7 @@ static int preprocess(CrustyVM *cvm) {
             if(lines == mem) {
                 temp = realloc(new, sizeof(CrustyLine) * (mem + 1));
                 if(temp == NULL) {
-                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory for line copy.\n");
+                    LOG_PRINTF_TOK(cvm, "Failed to allocate memory for line copy.\n");
                     goto failure;
                 }
                 new = (CrustyLine *)temp;
@@ -1572,7 +1997,7 @@ static int preprocess(CrustyVM *cvm) {
             new[lines].line = active.line;
             new[lines].offset = malloc(sizeof(long) * new[lines].tokencount);
             if(new[lines].offset == NULL) {
-                LOG_PRINTF_LINE(cvm, "Failed to allocate memory for line offsets copy.\n");
+                LOG_PRINTF_TOK(cvm, "Failed to allocate memory for line offsets copy.\n");
                 goto failure;
             }
             for(i = 0; i < new[lines].tokencount; i++) {
@@ -1584,12 +2009,6 @@ static int preprocess(CrustyVM *cvm) {
 
 skip_copy:
         cvm->logline++;
-    }
-
-    if(curmacro != NULL) {
-        LOG_PRINTF_LINE(cvm, "Macro without endmacro: %s.\n",
-                        &(cvm->tokenmem[curmacro->nameOffset]));
-        return(-1);
     }
 
     for(i = 0; i < cvm->lines; i++) {
@@ -1606,6 +2025,23 @@ skip_copy:
             }
         }
         free(macro);
+    }
+
+    if(active.offset != NULL) {
+        free(active.offset);
+    }
+
+    if(vars != NULL) {
+        free(vars);
+    }
+    if(values != NULL) {
+        free(values);
+    }
+
+    if(curmacro != NULL) {
+        LOG_PRINTF_TOK(cvm, "Macro without endmacro: %s.\n",
+                        &(cvm->tokenmem[curmacro->nameOffset]));
+        return(-1);
     }
 
     return(foundmacro);
@@ -1629,6 +2065,17 @@ failure:
         free(macro);
     }
 
+    if(active.offset != NULL) {
+        free(active.offset);
+    }
+
+    if(vars != NULL) {
+        free(vars);
+    }
+    if(values != NULL) {
+        free(values);
+    }
+
     return(-1);
 }
 
@@ -1641,7 +2088,7 @@ static int find_procedure(CrustyVM *cvm,
     unsigned int i;
 
     for(i = 0; i < cvm->procs; i++) {
-        if(strcmp(cvm->proc[i].name, name) == 0) {
+        if(strcmp(&(cvm->tokenmem[cvm->proc[i].nameOffset]), name) == 0) {
             return(i);
         }
     }
@@ -1879,7 +2326,7 @@ static int variable_declaration(CrustyVM *cvm,
 
         intinit = malloc(sizeof(int));
         if(intinit == NULL) {
-            LOG_PRINTF_LINE(cvm, "Failed to allocate memory for initializer.\n");
+            LOG_PRINTF_TOK(cvm, "Failed to allocate memory for initializer.\n");
             return(-1);
         }
 
@@ -1894,13 +2341,13 @@ static int variable_declaration(CrustyVM *cvm,
         if(end != &(cvm->tokenmem[line->offset[2]]) && *end == '\0') {
             intinit = malloc(sizeof(int));
             if(intinit == NULL) {
-                LOG_PRINTF_LINE(cvm, "Failed to allocate memory for initializer.\n");
+                LOG_PRINTF_TOK(cvm, "Failed to allocate memory for initializer.\n");
                 return(-1);
             }
 
             intinit[0] = num;
         } else {
-            LOG_PRINTF_LINE(cvm, "Initializer wasn't a number.\n");
+            LOG_PRINTF_TOK(cvm, "Initializer wasn't a number.\n");
             return(-1);
         }
     } else if(line->tokencount == 4) {
@@ -1908,10 +2355,10 @@ static int variable_declaration(CrustyVM *cvm,
             type = CRUSTY_TYPE_INT;
             length = number_list_ints(&(cvm->tokenmem[line->offset[3]]), &intinit);
             if(length < 0) {
-                LOG_PRINTF_LINE(cvm, "Failed to allocate memory for initializer.\n");
+                LOG_PRINTF_TOK(cvm, "Failed to allocate memory for initializer.\n");
                 return(-1);
             } else if(length == 0) {
-                LOG_PRINTF_LINE(cvm, "Initializer must be a space separated list of numbers.\n");
+                LOG_PRINTF_TOK(cvm, "Initializer must be a space separated list of numbers.\n");
                 return(-1);
             } else if(length == 1) { /* array without initializer, so fill with zero */
                 length = intinit[0];
@@ -1919,7 +2366,7 @@ static int variable_declaration(CrustyVM *cvm,
                 free(intinit);
                 intinit = malloc(sizeof(int) * length);
                 if(intinit == NULL) {
-                    LOG_PRINTF_LINE(cvm, "Failed to allocate memory for initializer.\n");
+                    LOG_PRINTF_TOK(cvm, "Failed to allocate memory for initializer.\n");
                     return(-1);
                 }
 
@@ -1931,10 +2378,10 @@ static int variable_declaration(CrustyVM *cvm,
             type = CRUSTY_TYPE_FLOAT;
             length = number_list_floats(&(cvm->tokenmem[line->offset[3]]), &floatinit);
             if(length < 0) {
-                LOG_PRINTF_LINE(cvm, "Failed to allocate memory for initializer.\n");
+                LOG_PRINTF_TOK(cvm, "Failed to allocate memory for initializer.\n");
                 return(-1);
             } else if(length == 0) {
-                LOG_PRINTF_LINE(cvm, "Initializer must be a space separated list of numbers.\n");
+                LOG_PRINTF_TOK(cvm, "Initializer must be a space separated list of numbers.\n");
                 return(-1);
             }
             /* array with initializer */
@@ -1944,7 +2391,7 @@ static int variable_declaration(CrustyVM *cvm,
 
             chrinit = malloc(length + 1);
             if(chrinit == NULL) {
-                LOG_PRINTF_LINE(cvm, "Failed to allocate memory for initializer.\n");
+                LOG_PRINTF_TOK(cvm, "Failed to allocate memory for initializer.\n");
                 return(-1);
             }
 
@@ -1953,11 +2400,11 @@ static int variable_declaration(CrustyVM *cvm,
                allocate the destination argument anyway. */
             strncpy(chrinit, &(cvm->tokenmem[line->offset[3]]), length + 1);
         } else {
-            LOG_PRINTF_LINE(cvm, "variable declaration can be array or string.\n");
+            LOG_PRINTF_TOK(cvm, "variable declaration can be array or string.\n");
             return(-1);
         }
     } else {
-        LOG_PRINTF_LINE(cvm, "static can be declared as string or "
+        LOG_PRINTF_TOK(cvm, "static can be declared as string or "
                              "array and is followed by an initializer "
                              "or array may be followed by a numeric "
                              "size.\n");
@@ -1971,7 +2418,8 @@ static int variable_declaration(CrustyVM *cvm,
                     chrinit, intinit, floatinit,
                     NULL,
                     proc) < 0) {
-        /* reason will have already been printed */
+        /* print an error so the user can get a line number. */
+        LOG_PRINTF_TOK(cvm, "Error from new_variable().\n");
         return(-1);
     }
 
@@ -2003,23 +2451,23 @@ static int symbols_scan(CrustyVM *cvm) {
            out previously */
         if(strcmp(GET_TOKEN(cvm->logline, 0), "proc") == 0) {
             if(cvm->line[cvm->logline].tokencount < 2) {
-                LOG_PRINTF_LINE(cvm, "proc takes a name as argument.\n");
+                LOG_PRINTF_TOK(cvm, "proc takes a name as argument.\n");
                 goto failure;
             }
 
             if(curProc != NULL) {
-                LOG_PRINTF_LINE(cvm, "proc within proc.\n");
+                LOG_PRINTF_TOK(cvm, "proc within proc.\n");
                 goto failure;
             }
 
             if(find_procedure(cvm, GET_TOKEN(cvm->logline, 1)) >= 0) {
-                LOG_PRINTF_LINE(cvm, "Redeclaration of procedure.\n");
+                LOG_PRINTF_TOK(cvm, "Redeclaration of procedure.\n");
                 goto failure;
             }
 
             curProc = realloc(cvm->proc, sizeof(CrustyProcedure) * (cvm->procs + 1));
             if(curProc == NULL) {
-                LOG_PRINTF_LINE(cvm, "Couldn't allocate memory for procedure.\n");
+                LOG_PRINTF_TOK(cvm, "Couldn't allocate memory for procedure.\n");
                 goto failure;
             }
             cvm->proc = curProc;
@@ -2059,7 +2507,7 @@ static int symbols_scan(CrustyVM *cvm) {
             continue; /* don't copy in to new list */
         } else if(strcmp(GET_TOKEN(cvm->logline, 0), "ret") == 0) {
             if(curProc == NULL) {
-                LOG_PRINTF_LINE(cvm, "ret without proc.\n");
+                LOG_PRINTF_TOK(cvm, "ret without proc.\n");
                 goto failure;
             }
 
@@ -2068,7 +2516,7 @@ static int symbols_scan(CrustyVM *cvm) {
             /* this is a real instruction, so it should be copied over */
         } else if(strcmp(GET_TOKEN(cvm->logline, 0), "static") == 0) {
             if(cvm->line[cvm->logline].tokencount < 2) {
-                LOG_PRINTF_LINE(cvm, "static takes a name as argument.\n");
+                LOG_PRINTF_TOK(cvm, "static takes a name as argument.\n");
                 goto failure;
             }
 
@@ -2079,12 +2527,12 @@ static int symbols_scan(CrustyVM *cvm) {
             continue; /* don't copy in to new list */
         } else if(strcmp(GET_TOKEN(cvm->logline, 0), "local") == 0) {
             if(cvm->line[cvm->logline].tokencount < 2) {
-                LOG_PRINTF_LINE(cvm, "local takes a name as argument.\n");
+                LOG_PRINTF_TOK(cvm, "local takes a name as argument.\n");
                 goto failure;
             }
 
             if(curProc == NULL) {
-                LOG_PRINTF_LINE(cvm, "local declared outside of procedure.\n");
+                LOG_PRINTF_TOK(cvm, "local declared outside of procedure.\n");
                 goto failure;
             }
 
@@ -2095,7 +2543,7 @@ static int symbols_scan(CrustyVM *cvm) {
             continue; /* don't copy in to new list */
         } else if(strcmp(GET_TOKEN(cvm->logline, 0), "stack") == 0) {
             if(cvm->line[cvm->logline].tokencount != 2) {
-                LOG_PRINTF_LINE(cvm, "stack takes a number as argument.\n");
+                LOG_PRINTF_TOK(cvm, "stack takes a number as argument.\n");
                 goto failure;
             }
 
@@ -2103,25 +2551,25 @@ static int symbols_scan(CrustyVM *cvm) {
             if(*temp == '\0' && temp != GET_TOKEN(cvm->logline, 1)) {
                 cvm->stacksize += stack;
             } else {
-                LOG_PRINTF_LINE(cvm, "stack takes a number as argument.\n");
+                LOG_PRINTF_TOK(cvm, "stack takes a number as argument.\n");
                 goto failure;
             }
 
             continue; /* don't copy in to new list */
         } else if(strcmp(GET_TOKEN(cvm->logline, 0), "label") == 0) {
             if(cvm->line[cvm->logline].tokencount != 2) {
-                LOG_PRINTF_LINE(cvm, "label takes a name as argument.\n");
+                LOG_PRINTF_TOK(cvm, "label takes a name as argument.\n");
                 goto failure;
             }
 
             if(curProc == NULL) {
-                LOG_PRINTF_LINE(cvm, "label not in a procedure.\n");
+                LOG_PRINTF_TOK(cvm, "label not in a procedure.\n");
                 goto failure;
             }
 
             temp = realloc(curProc->label, sizeof(CrustyLabel) * (curProc->labels + 1));
             if(temp == NULL) {
-                LOG_PRINTF_LINE(cvm, "Failed to allocate memory for labels list.\n");
+                LOG_PRINTF_TOK(cvm, "Failed to allocate memory for labels list.\n");
                 goto failure;
             }
             curProc->label = (CrustyLabel *)temp;
@@ -2138,7 +2586,7 @@ static int symbols_scan(CrustyVM *cvm) {
         new[lines].line = cvm->line[cvm->logline].line;
         new[lines].offset = malloc(sizeof(long) * new[lines].tokencount);
         if(new[lines].offset == NULL) {
-            LOG_PRINTF_LINE(cvm, "Failed to allocate memory for line copy.\n");
+            LOG_PRINTF_TOK(cvm, "Failed to allocate memory for line copy.\n");
             goto failure;
         }
         for(i = 0; i < new[lines].tokencount; i++) {
@@ -2244,6 +2692,7 @@ failure:
     return(-1);
 }
 
+#undef LOG_PRINTF_TOK
 #undef GET_TOKEN
 
 /* get a bunch of messy checks out of the way.  Many of these are wacky and
@@ -3282,6 +3731,9 @@ CrustyVM *crustyvm_new(const char *name,
                        unsigned int callstacksize,
                        const CrustyCallback *cb,
                        unsigned int cbcount,
+                       const char **var,
+                       const char **value,
+                       unsigned int vars,
                        void (*log_cb)(void *priv, const char *fmt, ...),
                        void *log_priv) {
     CrustyVM *cvm;
@@ -3289,6 +3741,8 @@ CrustyVM *crustyvm_new(const char *name,
     unsigned int i, j;
     char namebuffer[] = "preprocess###.cvm";
     long tokenstart;
+    unsigned long *varOffset;
+    unsigned long *valueOffset;
 
 #ifdef CRUSTY_TEST
     unsigned int k;
@@ -3382,6 +3836,49 @@ CrustyVM *crustyvm_new(const char *name,
     }
 #endif
 
+    cvm->stage = "input variables";
+#ifdef CRUSTY_TEST
+    LOG_PRINTF(cvm, "Start\n");
+#endif
+
+    varOffset = malloc(sizeof(long) * vars);
+    if(varOffset == NULL) {
+        LOG_PRINTF(cvm, "Failed to allocate memory for input variables list.\n");
+        crustyvm_free(cvm);
+        return(NULL);
+    }
+    valueOffset = malloc(sizeof(long) * vars);
+    if(valueOffset == NULL) {
+        LOG_PRINTF(cvm, "Failed to allocate memory for input values list.\n");
+        crustyvm_free(cvm);
+        return(NULL);
+    }
+
+    for(i = 0; i < vars; i++) {
+        tokenstart = add_token(cvm, var[i], strlen(var[i]), 0, NULL);
+        if(tokenstart < 0) {
+            LOG_PRINTF(cvm, "Failed to allocate memory for input variable.\n");
+            crustyvm_free(cvm);
+            return(NULL);
+        }
+        varOffset[i] = tokenstart;
+        tokenstart = add_token(cvm, value[i], strlen(value[i]), 0, NULL);
+        if(tokenstart < 0) {
+            LOG_PRINTF(cvm, "Failed to allocate memory for input value.\n");
+            crustyvm_free(cvm);
+            return(NULL);
+        }
+        valueOffset[i] = tokenstart;
+    }
+
+#ifdef CRUSTY_TEST
+    for(i = 0; i < vars; i++) {
+        LOG_PRINTF(cvm, "%s = %s\n",
+                   &(cvm->tokenmem[varOffset[i]]),
+                   &(cvm->tokenmem[valueOffset[i]]));
+    }
+#endif
+
     for(i = 0; i < MAX_PASSES; i++) {
         snprintf(namebuffer, sizeof(namebuffer), "preprocess %d", i + 1);
         cvm->stage = namebuffer;
@@ -3389,7 +3886,7 @@ CrustyVM *crustyvm_new(const char *name,
         LOG_PRINTF(cvm, "Start\n", i);
 #endif
 
-        foundmacro = preprocess(cvm);
+        foundmacro = preprocess(cvm, varOffset, valueOffset, vars);
         if(foundmacro < 0) {
             LOG_PRINTF(cvm, "Failed preprocess at pass %d.\n", i + 1);
             crustyvm_free(cvm);
@@ -3417,6 +3914,8 @@ CrustyVM *crustyvm_new(const char *name,
             break;
         }
     }
+    free(varOffset);
+    free(valueOffset);
     if(i == MAX_PASSES) {
         LOG_PRINTF(cvm, "Preprocess passes exceeded.\n");
         crustyvm_free(cvm);
@@ -3435,7 +3934,7 @@ CrustyVM *crustyvm_new(const char *name,
             return(NULL);
         }
 
-        tokenstart = add_token(cvm, cb[i].name, strlen(cb[i].name), 0);
+        tokenstart = add_token(cvm, cb[i].name, strlen(cb[i].name), 0, NULL);
         if(tokenstart < 0) {
             LOG_PRINTF(cvm, "Failed to allocate memory for callback name.\n");
             crustyvm_free(cvm);
@@ -4906,10 +5405,31 @@ int print_float(void *priv, void *value, unsigned int index) {
     return(0);
 }
 
+#define CLEAN_ARGS \
+    if(vars > 0) { \
+        for(i = 0; i < vars; i++) { \
+            free(var[i]); \
+            free(value[i]); \
+        } \
+        free(var); \
+        free(value); \
+    } \
+    vars = 0;
+
 int main(int argc, char **argv) {
+    const char *filename = NULL;
+    unsigned int i;
+    unsigned int arglen;
+    char *equals;
+    char *temp;
+    char **tempa;
+    char **var = NULL;
+    char **value = NULL;
+    unsigned int vars = 0;
+
     FILE *in = NULL;
     CrustyVM *cvm;
-    char *program;
+    char *program = NULL;
     long len;
     int result;
     CrustyCallback cb[] = {
@@ -4951,56 +5471,129 @@ int main(int argc, char **argv) {
         }
     };
 
-    if(argc < 2) {
-        fprintf(stderr, "USAGE: %s <filename>\n", argv[0]);
-        goto error0;
+    for(i = 1; i < (unsigned int)argc; i++) {
+        arglen = strlen(argv[i]);
+        if(arglen > 0 && argv[i][0] == '-') {
+            if(arglen > 1) {
+                if(argv[i][1] == '-') {
+                    if(filename != NULL) {
+                        filename = NULL;
+                        break;
+                    }
+                    if(i + 1 < (unsigned int)argc) {
+                        filename = argv[i + 1];
+                    }
+                    break;
+                } else if(argv[i][1] == 'D') {
+                    if(argv[i][2] == '=') {
+                        filename = NULL;
+                        break;
+                    }
+                    equals = strchr(&(argv[i][2]), '=');
+                    if(equals == NULL) {
+                        filename = NULL;
+                        break;
+                    }
+
+                    tempa = realloc(var, sizeof(char *) * (vars + 1));
+                    if(tempa == NULL) {
+                        fprintf(stderr, "Failed to allocate memory for vars list.\n");
+                        goto error;
+                    }
+                    var = tempa;
+                    tempa = realloc(value, sizeof(char *) * (vars + 1));
+                    if(tempa == NULL) {
+                        fprintf(stderr, "Failed to allocate memory for values list.\n");
+                        goto error;
+                    }
+                    value = tempa;
+                    /* difference from start, take away "-D", add space for '\0' */
+                    temp = malloc(equals - argv[i] - 2 + 1);
+                    if(temp == NULL) {
+                        fprintf(stderr, "Failed to allocate memory for var.\n");
+                        goto error;
+                    }
+                    memcpy(temp, &(argv[i][2]), equals - argv[i] - 2);
+                    temp[equals - argv[i] - 2] = '\0';
+                    var[vars] = temp;
+                    /* total length, take away the length of the first part,
+                       take away the '=', add the '\0' */
+                    temp = malloc(arglen - (equals - argv[i] - 2) - 1 + 1);
+                    if(temp == NULL) {
+                        fprintf(stderr, "Failed to allocate memory for value.\n");
+                        goto error;
+                    }
+                    memcpy(temp, &(equals[1]), arglen - (equals - argv[i] - 2) - 1);
+                    temp[arglen - (equals - argv[i] - 2) - 1] = '\0';
+                    value[vars] = temp;
+                    vars++;
+                } else {
+                    filename = NULL;
+                    break;
+                }
+            }
+        } else {
+            if(filename != NULL) {
+                filename = NULL;
+                break;
+            }
+            filename = argv[i];
+        }
     }
 
-    in = fopen(argv[1], "rb");
+    if(filename == NULL) {
+        fprintf(stderr, "USAGE: %s [(<filename>|-D<var>=<value>) ...] [-- <filename>]\n", argv[0]);
+        goto error;
+    }
+
+    in = fopen(filename, "rb");
     if(in == NULL) {
-        fprintf(stderr, "Failed to open file %s.\n", argv[1]);
-        goto error0;
+        fprintf(stderr, "Failed to open file %s.\n", filename);
+        goto error;
     }
 
     if(fseek(in, 0, SEEK_END) < 0) {
        fprintf(stderr, "Failed to seek to end of file.\n");
-       goto error1;
+       goto error;
     }
 
     len = ftell(in);
     if(len < 0) {
         fprintf(stderr, "Failed to get file length.\n");
-        goto error1;
+        goto error;
     }
     rewind(in);
 
     program = malloc(len);
     if(program == NULL) {
-        goto error1;
+        goto error;
     }
 
     if(fread(program, 1, len, in) < (unsigned long)len) {
         fprintf(stderr, "Failed to read file.\n");
-        goto error2;
+        goto error;
     }
 
     fclose(in);
     in = NULL;
 
-    cvm = crustyvm_new(argv[1], program, len,
+    cvm = crustyvm_new(filename, program, len,
                        CRUSTY_FLAG_OUTPUT_PASSES
                        /* | CRUSTY_FLAG_TRACE */,
                        0,
                        cb, sizeof(cb) / sizeof(CrustyCallback),
+                       (const char **)var, (const char **)value, vars,
                        vprintf_cb, stderr);
     if(cvm == NULL) {
         fprintf(stderr, "Failed to load program.\n");
-        goto error2;
+        goto error;
     }
     free(program);
     program = NULL;
+    CLEAN_ARGS
     fprintf(stderr, "Program loaded.\n");
 
+    fprintf(stderr, "Token memory size: %u\n", cvm->tokenmemlen);
     fprintf(stderr, "Stack size: %u\n", cvm->stacksize);
 
     result = crustyvm_run(cvm, "init");
@@ -5009,21 +5602,25 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Program reached an exception while running: %s\n",
                 crustyvm_statusstr(crustyvm_get_status(cvm)));
         crustyvm_debugtrace(cvm, 1);
-        goto error1;
+        goto error;
     }
 
     fprintf(stderr, "Program completed successfully.\n");
     crustyvm_free(cvm);
 
-error2:
+    exit(EXIT_SUCCESS);
+
+error:
     if(program != NULL) {
         free(program);
     }
-error1:
+
     if(in != NULL) {
         fclose(in);
     }
-error0:
+
+    CLEAN_ARGS
+
     exit(EXIT_FAILURE);
 }
 #endif

@@ -1,8 +1,14 @@
 include midi.inc
 
 expr maxlistlen 10
-expr interval 80 ; milliseconds
 expr channel 0
+
+macro SET_INTERVAL
+expr interval 80 ; milliseconds
+endmacro SET_INTERVAL
+
+expr DO_SET_INTERVAL "(interval < 10)"
+if DO_SET_INTERVAL SET_INTERVAL
 
 static notelist     ints maxlistlen
 static velocitylist ints maxlistlen

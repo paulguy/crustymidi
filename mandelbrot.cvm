@@ -89,7 +89,7 @@ proc init
                 label iterexit
 
             div i iterdiv
-            move out i
+            ;move out i
 
             add xpos xstep
             add x 1

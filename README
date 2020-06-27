@@ -1,39 +1,330 @@
-crustymidi
-MIDI event scripting for JACK
 
-USAGE:
-crustymidi <script file>
+                         __  , __           ___  |_
+                       ,'  ` |'  ` |    | ,'   ' |  |    |
+                       |     |     |    |  `--.  |  |    |
+                       `.__. |     `.__/| .___.' \_ `.__/|
+                                                     .__.'
+                   ____________     ___   ____________     ___
+                  |            `,  |   | |            `,  |   |
+                  |  ,--,  ,--,  | |   | |   ,------,   | |   |
+                  |  |  |  |  |  | |   | |   |      |   | |   |
+                  |  |  |  |  |  | |   | |   |      |   | |   |
+                  |  |  |  |  |  | |   | |   |      |   | |   |
+                  |  |  |  |  |  | |   | |   '------'   | |   |
+                  |__|  |__|  |__| |___| |____________.'  |___|                  
 
-Script command documentation in commands.txt
+                  #############################################
+                  #############################################::
+                    :::::::::::::::::::::::::::::::::::::::::::::
 
-midi.inc can be included for some useful constants
+                         MIDI event scripting for JACK
 
-crustymidi defines some callbacks:
+ _
+/ \ ----------------
+|/| [-] CONTENTS [-]
+\_/ ----------------
 
-Read callbacks:
-length  - get length of incoming event
-data:n  - read data at position n
-port    - the port the event came on
-time    - get timestamp of event.  JACK events are 64 bits so this will only
-          return the low 32 bits.
-rate    - the current JACK rate
+1. BUILDING
+2. RUNNING
+3. SCRIPT FILES
+4. CRUSTYVM SCRIPT REFERENCE
+5. CRUSTYVM VARIABLE REFERENCES
+6. CRUSTYMIDI CALLBACKS
 
-write callbacks:
-length  - set length for new event
-data:n  - write data in to event
-port    - specify which port the data should go out to
-time    - samples from now that event should trigger
-commit  - 0(commit_pass) to pass on the input event as-is,
-          1(commit_new) to provide a new event
-timer   - when a value is written to this, an event will be triggered with
-          command 0xF8(midi_cmd_time_clock) the given number of samples from now
 
-A file may start with a string ";crustymidi " (treated as a comment to the
-interpreter) where some space separated parameters may be defined.  For now you
-can use it to specify input and output ports.  These can be specified by
-"in:name" and "out:name" to specify input and output ports with a specified
-name.  This is what will appear to JACK.  To the script, they will just be
-numbered with each set starting from 0.
+/|  ----------------
+ |  [-] BUILDING [-]
+_|_ ----------------
 
-for more information, check the example files, and knowledge of MIDI protocol
-is necessary.
+Just run 'make' in the directory.  It needs nothing but JACK headers and
+development libraries.
+
+ _
+' | ---------------
+ /  [-] RUNNING [-]
+/__ ---------------
+
+./crustymidi [-Dvariable=value] <script file>
+
+-D is a means of passing in substring replacements.  Any string "variable"
+appearing within a word or quoted string will be replaced by "value".  Mostly to
+be used for passing in optional parameters.
+
+If a filename begins with a -, you can end a line with -- then the next argument
+will be taken as a filename.
+
+ _
+' | --------------------
+-<  [-] SCRIPT FILES [-]
+._| --------------------
+
+Scripts must contain an 'init' and 'event' procedure.  'init' is called once
+after the script is loaded.  All services are available at this point and timers
+and events can be written at this point.  'event' is called once per MIDI input
+event.  A script may consume or change its internal state based on the event and
+never emit another event or can emit theoretically any number of additional
+events or timers per input event.
+
+By default a script will have one input and one output port, named 'in' and
+'out', respectively.  Ports may be named and additional input and output ports
+may be defined by starting the script with the string ';crustymidi ' then
+following up with 'in:<name>' and 'out:<name>' statements, all on the same line.
+Both sets of input and output ports start numbered from 0 and increment with
+each statement.
+
+See example .cvm files.
+
+midi.inc can be included for some useful constants, but it's still very
+incomplete.
+
+
+ /| ---------------------------------
+|_| [-] CRUSTYVM SCRIPT REFERENCE [-]
+  | ---------------------------------
+
+include <filename>
+  Include a file in to the script.  It'll be as if the lines of filename replace
+  the include statement line.
+
+expr <variable> <expression>
+  At script compile time, evaluate expression and assign its result to variable.
+  Like anything, any variables passed in with the -D argument, previous expr
+  statements or macro arguments will replace values in expression, anything not
+  replaced (not defined) will be evaluated as zeroes.  Expressions are all
+  evaluated as integers.
+  
+  Expressions may contain these various operations, and are evaluated in this
+  order:
+    *   Multiplication
+    /   Division
+    %   Modulo (Remainder)
+  ------
+    +   Addition
+    -   Subtraction 
+  ------
+    <<  Binary shift left
+    >>  Binary shift right
+  ------
+    <   Is less than (non-zero if less than, zero if not)
+    <=  Is less than or equal to
+    >   Is greater than
+    >=  Is greater than or equal to
+  ------
+    ==  Is equal to
+    !=  Is not equal to
+  ------
+    &   Binary AND
+    !&  Binary NAND
+  ------
+    |   Binary OR
+    !|  Binary NOR
+  ------
+    ^   Binary XOR
+    !^  Binary XNOR
+
+  This is done over each group of parentheses until there is only a single
+  number remaining.
+
+macro <name> [<arg1> <arg2> ...] / endmacro <name>
+  Define a macro name with optional arguments.  When a macro replacement is
+  being evaluated, strings matching any arguments will be replaced with the
+  string passed with the macro call, much in the way -D works, but only for the
+  length of the macro.  The name must be provided with endmacro so the
+  interpreter knows which macro you intend to end because macros may define
+  additional macros.
+
+<name> [<arg1> <arg2> ...]
+  Use a macro <name> with optional arguments.  You must provide the same number
+  of arguments as the macro defines as arguments.
+
+if <value> <name> [<arg1> <arg2> ...]
+  If value evaluates to non-zero as written or after being replaced by -D, an
+  expr variable or a macro argument, start evaluating macro <name>.  Same rules
+  for arguments apply as an unconditional macro call.
+
+stack <value>
+  Accumulate additional stack memory for storing variables.  Typically the
+  default leaves enough memory for static variables and for every procedure to
+  be called before return once.  If more is necessary, this can accumulate more.
+
+static <name> [(#|ints|floats) <(#|#,#,..)>] [string <(word|"quoted string")>]
+  Define a static (global) variable which can be read or written from any
+  procedure and is initialized only once while the script is initialized. Can be
+  defined anywhere.
+
+  A single number as an argument defines the size of the array, omitting it
+  defaults to an array of 1, and the type in either case is assumed to be
+  integer, and the array will be initialized as all zeroes.
+  
+  'ints' or 'floats' instead, will explicitly specify the type to be integer or
+  floating point.  Arguments following are all treated as initializer values for
+  the array, even just an array of 1.
+
+  'string' instead, will specify that the next word or quoted string is to be
+  the initializer for a character array.  Quoted strings support some escape
+  sequences.  '\n' for line feed, '\n' for carriage return, '\\' for a single
+  backslash and a slash followed by a new line will consume the new line so it
+  doesn't appear in the string at all.
+
+  'ints' type is 32 bit signed integers.
+  'floats' type is double precision floats (may depend on platform).
+  'string' type is an array of 8 bit signed integers.  Writing larger values
+    will be casted down to 8 bits.
+
+local <name> [(#|ints|floats) <(#|#,#,..)>] [string <(word|"quoted string")>]
+  All the arguments are like the above, but this is to be defined within a
+  procedure.  These values will always be initialized on every procedure call,
+  including calls to 'init' and 'event'.
+
+proc <name> [<arg1> <arg2> ...] / ret
+  Define a procedure <name>, with optional arguments.  Arguments are treated as
+  local variables, but aren't initialized as they are just references to
+  variables passed in (modifying these variables inside the procedure will keep
+  them modified after the procedure returns, including local variables from
+  other procedures being passed in.).  An array length passed in is treated as
+  an array of size 1 containing the length and can be modified within the body
+  of the call, but does not affect the length of the array as this value can't
+  normally be written to.  An array index passed in will be accumulated and
+  index 0 within the procedure body will be the variable at the index passed in,
+  and additional calls will add up that index.
+
+call <name> [<arg1> <arg2> ...]
+  Call a procedure <name>, with optional arguments.  All arguments a procedure
+  requires must be provided.  Arguments are passed in as references.
+
+label <name>
+  Define a label <name>.  Necessary for changing program flow with jumps.  These
+  are local to each procedure, so procedures may reuse label names and jumps
+  cannot jump outside of their procedure.
+
+move <destination> <source>
+  Move a value from source in to destination.  Source variable must be readable
+  and destination variable must be writable.  Not assuring this will result in a
+  compile or runtime error, depending on circumstances.  A callback access may
+  also result in a runtime error if the function indicates an error.
+
+add <destination> <source>
+  Add source to destination and store in source, also update result register for
+  use with conditional jumps.  Source must be readable and destination must be
+  readable and writable.  Callbacks are not cached in any way, so using a
+  callback in the destination will result in a read and a write and callback in
+  source will result in a read.
+
+sub <destination> <source>
+  Subtract destination and source; see 'add'.
+
+and <destination> <source>
+  Binary AND destination and source; see 'add'.
+
+or <destination> <source>
+  Binary OR destination and source; see 'add'.
+
+xor <destination> <source>
+  Binary XOR destination and source; see 'add'.
+
+shr <destination> <amount>
+  Binary shift right destination by amount.  See 'add'.
+
+shl <destination> <amount>
+  Binary shift left destination by amount.  See 'add'.
+
+cmp <first operand> <second operand>
+  Subtract second operand from first operand and update result register.  No
+  variables are modified/written, only read, including callbacks.
+
+jump <label>
+  Jump to a label within the current procedure.  Jumps can be forward or
+  backward.
+
+jumpz <label>
+  Jump to a label if the result of the last operation is zero.
+
+jumpn <label>
+  Jump to a label if the result of the last operation is not zero.
+
+jumpl <label>
+  Jump to a label if the result of the last operation is less than zero.  For
+  example <first operand> - <second operand> will result in a value less than
+  zero if <first operand> is less than <second operand>.
+
+jumpg <label>
+  Jump to a label if the result of the last operation is greater than zero.
+
+ __
+|   ------------------------------------
+`-, [-] CRUSTYVM VARIABLE REFERENCES [-]
+._/ ------------------------------------
+
+In any place where a variable may be referenced or used, the format will always
+be the same:
+
+<name>[:[<index>]]
+
+Name must be provided, optionally followed by a colon ':', then optionally by an
+index.  Just the colon will return the length of the array in variable <name>,
+where a colon followed by the index will fetch the value at the index, or in the
+case of a procedure call, pass in a reference starting from that index.
+Negative indexes aren't allowed anywhere.  Out of range accesses will result in
+a compile or runtime error.
+
+ __
+/   ----------------------------
+|`\ [-] CRUSTYMIDI CALLBACKS [-]
+\_/ ----------------------------
+
+Script procedure callbacks (all must be defined)
+  init
+    Called once on script initialization.
+
+  event
+    Called on every incoming MIDI event.
+
+
+Read callbacks
+  length
+    Get the length in bytes of the incoming event.
+
+  data:n
+    Read data from event at index n.  Out of bounds access will return a
+    callback error.
+
+  port
+    Defined port which the event came in on.
+
+  time
+    Sample on which the event came in on, depends on the JACK sample rate.  JACK
+    provides event times as 64 bit values; this just returns the low 32 bits, so
+    this value may wrap as the script runs.
+
+  rate
+    Current JACK rate, may change from event to event.  On rate change, any
+    events in-flight will have automatically been scaled to occur at the
+    intended time.
+
+Write callbacks
+  length
+    Set the event length which you'd like to write.  Ignored when recommitting
+    the input event.  Initialized to 0.  Data buffer growth is initialized to 0
+    on length changes.
+
+  data:n
+    Write data in to event at index n.  n must be within bounds defined by the
+    value written in to length.
+
+  port
+    Output port which event should be written to, initialized to 0.
+
+  time
+    Time in samples after input event time (or 0 on init) that the event should
+    be output to JACK.  A time of 0 means to emit the event at the same time as
+    the event incoming.  Initialized to 0.
+
+  commit
+    Commit an event.  Multiple output events may be emitted per input event. A
+    zero written to commit means to just re-emit the same event at the same
+    time, however a different output port may be specified.
+
+  timer
+    Cause a timer event to be emitted by some samples in the future.  The 
+    generated event will be of length 1 and and be command 0xF8, chosen for
+    being time-related and JACK shouldn't be emitting these events.

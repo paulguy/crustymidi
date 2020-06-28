@@ -125,7 +125,11 @@ expr <variable> <expression>
   This is done over each group of parentheses until there is only a single
   number remaining.
 
-macro <name> [<arg1> <arg2> ...] / endmacro <name>
+macro <name> [<arg1> <arg2> ...]
+statement...
+statement...
+...
+endmacro <name>
   Define a macro name with optional arguments.  When a macro replacement is
   being evaluated, strings matching any arguments will be replaced with the
   string passed with the macro call, much in the way -D works, but only for the
@@ -176,7 +180,11 @@ local <name> [(#|ints|floats) <(#|#,#,..)>] [string <(word|"quoted string")>]
   procedure.  These values will always be initialized on every procedure call,
   including calls to 'init' and 'event'.
 
-proc <name> [<arg1> <arg2> ...] / ret
+proc <name> [<arg1> <arg2> ...]
+statement...
+statement...
+...
+ret
   Define a procedure <name>, with optional arguments.  Arguments are treated as
   local variables, but aren't initialized as they are just references to
   variables passed in (modifying these variables inside the procedure will keep
@@ -278,7 +286,6 @@ Script procedure callbacks (all must be defined)
 
   event
     Called on every incoming MIDI event.
-
 
 Read callbacks
   length

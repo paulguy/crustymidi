@@ -1,9 +1,9 @@
 include midi.inc
 
-static spacechr   32
-static newlinechr 10
-static hexdigits  string "0123456789ABCDEF"
+expr spacechr   32
+expr newlinechr 10
 
+static hexdigits  string "0123456789ABCDEF"
 static notes  string "CCDDEFFGGAAB"
 static sharps string " # #  # # # "
 

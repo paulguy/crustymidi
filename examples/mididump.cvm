@@ -1,0 +1,312 @@
+include midi.inc
+
+static spacechr   32
+static newlinechr 10
+static hexdigits  string "0123456789ABCDEF"
+
+static notes  string "CCDDEFFGGAAB"
+static sharps string " # #  # # # "
+
+static str_time       string "Time: "
+static str_unrec      string "Unrecognized command\n"
+static str_chan       string "Channel: "
+static str_sysex      string "System Exclusive (0xF0)\n"
+static str_length     string "Length: "
+static str_data       string "Data: "
+static str_timeqframe string "Time Code Quarter Frame (0xF1)"
+static str_type       string "Type: "
+static str_value      string "Value: "
+static str_songpos    string "Song Position (0xF2): "
+static str_songsel    string "Song Select (0xF3): "
+static str_tunereq    string "Tune Request (0xF6)\n"
+static str_timeclock  string "Time Clock (0xF8)\n"
+static str_start      string "Start (0xFA)\n"
+static str_continue   string "Continue (0xFB)\n"
+static str_stop       string "Stop (0xFC)\n"
+static str_sense      string "Sense (0xFE)\n"
+static str_reset      string "Reset (0xFF)\n"
+static str_noteoff    string "Note Off (0x8n)\n"
+static str_note       string "Note: "
+static str_velocity   string "Velocity: "
+static str_noteon     string "Note On (0x9n)\n"
+static str_polytouch  string "Polyphonic Aftertouch (0xAn)\n"
+static str_pressure   string "Pressure: "
+static str_cc         string "Control Change (0xBn)\n"
+static str_control    string "Control: "
+static str_progch     string "Program Change (0xCn)\n"
+static str_chantouch  string "Channel Aftertouch (0xDn)\n"
+static str_pitchbend  string "Pitchbend (0xEn)\n"
+
+proc printstr str
+    local i 0
+
+    label loop
+        cmp i str:
+        jumpz endloop
+        move print_chr str:i
+        add i 1
+    jump loop
+    label endloop
+ret
+
+macro printhex8 val
+    move temp val
+    and  temp 0xF0
+    shr  temp 4
+    move print_chr hexdigits:temp
+    move temp val
+    and  temp 0x0F
+    move print_chr hexdigits:temp
+endmacro printhex8
+
+proc hexdump buffer len
+    local i 0
+    local temp
+
+    label loop
+        cmp i len
+        jumpz endloop
+        printhex8 buffer:i
+        move print_chr spacechr
+        add i 1
+    jump loop
+    label endloop
+ret
+
+proc printnote note
+    local octave
+    local temp
+
+    move octave note
+    div  octave 12
+    sub  octave 1
+
+    move temp note
+    mod  temp 12
+
+    move print_chr notes:temp
+    move print_chr sharps:temp
+    move print_int octave
+ret
+
+proc init
+ret
+
+proc event
+    local cmd
+    local chan
+    local len
+    local type
+    local value
+
+    ; always pass
+    move commit commit_pass
+
+    ; Time: {}\n
+    call printstr  str_time
+    move print_int time
+    move print_chr newlinechr
+
+    move cmd data:midi_cmd_idx
+
+    ; system common messages
+
+    cmp cmd midi_cmd_sysex
+    jumpz sysex
+    cmp cmd midi_cmd_timeqframe
+    jumpz timeqframe
+    cmp cmd midi_cmd_songpos
+    jumpz songpos
+    cmp cmd midi_cmd_songsel
+    jumpz songsel
+    cmp cmd midi_cmd_tunereq
+    jumpz tunereq
+    cmp cmd midi_cmd_timeclock
+    jumpz timeclock
+    cmp cmd midi_cmd_start
+    jumpz start
+    cmp cmd midi_cmd_continue
+    jumpz continue
+    cmp cmd midi_cmd_stop
+    jumpz stop
+    cmp cmd midi_cmd_sense
+    jumpz sense
+    cmp cmd midi_cmd_reset
+    jumpz reset
+
+    ; channel messages
+    move chan cmd
+    and  chan midi_chan_mask
+    and  cmd  midi_cmd_mask
+
+    call printstr str_chan
+    move print_int chan
+    move print_chr newlinechr
+
+    cmp cmd midi_cmd_note_off
+    jumpz note_off
+    cmp cmd midi_cmd_note_on
+    jumpz note_on
+    cmp cmd midi_cmd_polytouch
+    jumpz polytouch
+    cmp cmd midi_cmd_cc
+    jumpz cc
+    cmp cmd midi_cmd_progch
+    jumpz progch
+    cmp cmd midi_cmd_chantouch
+    jumpz chantouch
+    cmp cmd midi_cmd_pitchbend
+    jumpz pitchbend
+
+    ; unrecognized command
+    call printstr str_unrec
+    call hexdump data length
+    jump end
+
+    label sysex
+        move len length
+        sub len midi_sysex_data
+
+        ; System Exclusive (0xF0)\nLength: {len}\n
+        call printstr  str_sysex
+        call printstr  str_length
+        move print_int len
+        move print_chr newlinechr
+
+        ; Data: ...\n
+        call printstr  str_data
+        call hexdump   data:midi_sysex_data len
+        move print_chr newlinechr
+    jump end
+
+    label timeqframe
+        midi_timeqframe_split type value data:midi_timeqframe_data
+
+        ; Time Code Quarter Frame (0xF1)\nType: {type}\nValue: {value}\n
+        call printstr  str_timeqframe
+        call printstr  str_type
+        move print_int type
+        move print_chr newlinechr
+        call printstr  str_value
+        move print_int value
+        move print_chr newlinechr
+    jump end
+
+    label songpos
+        midi_dword_merge value data:midi_songpos_low_idx data:midi_songpos_high_idx
+
+        ; Song Position (0xF2): {value}\n
+        call printstr  str_songpos
+        move print_int value
+        move print_chr newlinechr
+    jump end
+
+    label songsel
+        ; Song Select (0xF3): {}\n
+        call printstr  str_songsel
+        move print_int data:midi_songsel_song_idx
+        move print_chr newlinechr
+    jump end
+
+    label tunereq
+        call printstr str_tunereq
+    jump end
+
+    label timeclock
+        call printstr str_timeclock
+    jump end
+    
+    label start
+        call printstr str_start
+    jump end
+
+    label continue
+        call printstr str_continue
+    jump end
+
+    label stop
+        call printstr str_stop
+    jump end
+
+    label sense
+        call printstr str_sense
+    jump end
+
+    label reset
+        call printstr str_reset
+    jump end
+
+    label note_off
+        ; Note Off (0x8n)\nNote: {} {}\nVelocity: {}\n
+        call printstr  str_noteoff
+        call printstr  str_note
+        move print_int data:midi_note_idx
+        move print_chr spacechr
+        call printnote data:midi_note_idx
+        move print_chr newlinechr
+        call printstr  str_velocity
+        move print_int data:midi_velocity_idx
+        move print_chr newlinechr
+    jump end
+
+    label note_on
+        ; Note On (0x9n)\nNote: {} {}\nVelocity: {}\n
+        call printstr  str_noteon
+        call printstr  str_note
+        move print_int data:midi_note_idx
+        move print_chr spacechr
+        call printnote data:midi_note_idx
+        move print_chr newlinechr
+        call printstr  str_velocity
+        move print_int data:midi_velocity_idx
+        move print_chr newlinechr
+    jump end
+
+    label polytouch
+        ; Polyphonic Aftertouch (0xAn):\nNote: {}\nPressure: {}\n
+        call printstr  str_polytouch
+        call printstr  str_note
+        call printnote data:midi_note_idx
+        move print_chr newlinechr
+        call printstr  str_pressure
+        move print_int data:midi_note_pressure_idx
+        move print_chr newlinechr
+    jump end
+
+    label cc
+        ; Control Change (0xBn)\nControl: {} ({})\nValue: {}\n
+        call printstr  str_cc
+        call printstr  str_control
+        move print_int data:midi_cc_controller_idx
+        ; TODO print reserved/common CCs
+        move print_chr newlinechr
+        call printstr  str_value
+        move print_int data:midi_cc_value_idx
+        move print_chr newlinechr
+    jump end
+
+    label progch
+        ; Program Change (0xCn): {}\n
+        call printstr  str_progch
+        move print_int data:midi_progch_prog_idx
+        move print_chr newlinechr
+    jump end
+
+    label chantouch
+        ; Channel Aftertouch (0xDn): {}\n
+        call printstr  str_chantouch
+        move print_int data:midi_chantouch_pressure_idx
+        move print_chr newlinechr
+    jump end
+
+    label pitchbend
+        midi_dword_merge value data:midi_pitchbend_low_idx data:midi_pitchbend_high_idx
+
+        ; Pitchbend (0xEn): {}\n
+        call printstr  str_pitchbend
+        move print_int value
+        move print_chr newlinechr
+
+    label end
+        move print_chr newlinechr
+ret

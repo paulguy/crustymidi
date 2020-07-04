@@ -587,9 +587,13 @@ int timer(void *priv, void *val, unsigned int index) {
     return(0);
 }
 
-/* this will make crackles and latency so don't use it normally */
 int print_int(void *priv, void *value, unsigned int index) {
-    printf("%d\n", *(int *)value);
+    fprintf((FILE *)priv, "%d", *(int *)value);
+    return(0);
+}
+
+int print_chr(void *priv, void *value, unsigned int index) {
+    fprintf((FILE *)priv, "%c", *(char *)value);
     return(0);
 }
 
@@ -758,10 +762,26 @@ int main(int argc, char **argv) {
     char *program;
     unsigned long len;
     CrustyCallback cb[] = {
+        /* print functions may cause underruns/crackles */
+        {
+            .name = "print_chr", .length = 1, .type = CRUSTY_TYPE_INT,
+            .read  = NULL, .readpriv  = NULL,
+            .write = print_chr, .writepriv = stdout
+        },
+        {
+            .name = "print_int", .length = 1, .type = CRUSTY_TYPE_INT,
+            .read  = NULL, .readpriv  = NULL,
+            .write = print_int, .writepriv = stdout
+        },
+        {
+            .name = "debug_print_chr", .length = 1, .type = CRUSTY_TYPE_INT,
+            .read  = NULL, .readpriv  = NULL,
+            .write = print_chr, .writepriv = stderr
+        },
         {
             .name = "debug_print_int", .length = 1, .type = CRUSTY_TYPE_INT,
             .read  = NULL, .readpriv  = NULL,
-            .write = print_int, .writepriv = NULL
+            .write = print_int, .writepriv = stderr
         },
         {
             .name = "length", .length = 1, .type = CRUSTY_TYPE_INT,
@@ -1069,6 +1089,7 @@ int main(int argc, char **argv) {
     tctx.good = 1;
     for(;;) {
         usleep(1000000);
+        fflush(stdout);
         if(tctx.good == 0) {
             break;
         }

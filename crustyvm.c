@@ -22,6 +22,7 @@
 #include <string.h>
 #include <limits.h>
 #include <stddef.h>
+#include <math.h>
 
 #ifdef CRUSTY_TEST
 #include <stdarg.h>
@@ -128,6 +129,7 @@ typedef enum {
     CRUSTY_INSTRUCTION_TYPE_SUB,
     CRUSTY_INSTRUCTION_TYPE_MUL,
     CRUSTY_INSTRUCTION_TYPE_DIV,
+    CRUSTY_INSTRUCTION_TYPE_MOD,
     CRUSTY_INSTRUCTION_TYPE_AND,
     CRUSTY_INSTRUCTION_TYPE_OR,
     CRUSTY_INSTRUCTION_TYPE_XOR,
@@ -1657,7 +1659,7 @@ error:
 
 #undef ISJUNK
 
-#define INSTRUCTION_COUNT (24)
+#define INSTRUCTION_COUNT (25)
 
 static int valid_instruction(const char *name) {
     int i;
@@ -1675,6 +1677,7 @@ static int valid_instruction(const char *name) {
         "sub",
         "mul",
         "div",
+        "mod",
         "and",
         "or",
         "xor",
@@ -2058,8 +2061,8 @@ skip_copy:
     }
 
     if(curmacro != NULL) {
-        LOG_PRINTF_TOK(cvm, "Macro without endmacro: %s.\n",
-                        &(cvm->tokenmem[curmacro->nameOffset]));
+        LOG_PRINTF(cvm, "Macro without endmacro: %s.\n",
+                   &(cvm->tokenmem[curmacro->nameOffset]));
         return(-1);
     }
 
@@ -3196,6 +3199,7 @@ static int codegen(CrustyVM *cvm) {
         } MATH_INSTRUCTION("sub", CRUSTY_INSTRUCTION_TYPE_SUB)
         } MATH_INSTRUCTION("mul", CRUSTY_INSTRUCTION_TYPE_MUL)
         } MATH_INSTRUCTION("div", CRUSTY_INSTRUCTION_TYPE_DIV)
+        } MATH_INSTRUCTION("mod", CRUSTY_INSTRUCTION_TYPE_MOD)
         } MATH_INSTRUCTION("and", CRUSTY_INSTRUCTION_TYPE_AND)
         } MATH_INSTRUCTION("or",  CRUSTY_INSTRUCTION_TYPE_OR )
         } MATH_INSTRUCTION("xor", CRUSTY_INSTRUCTION_TYPE_XOR)
@@ -3535,6 +3539,9 @@ static int check_instruction(CrustyVM *cvm,
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_DIV:
             MATH_INSTRUCTION("div", 1)
+            return(MOVE_ARGS + 1);
+        case CRUSTY_INSTRUCTION_TYPE_MOD:
+            MATH_INSTRUCTION("mod", 1)
             return(MOVE_ARGS + 1);
         case CRUSTY_INSTRUCTION_TYPE_AND:
             MATH_INSTRUCTION("and", 1)
@@ -4964,6 +4971,45 @@ CrustyStatus crustyvm_step(CrustyVM *cvm) {
             break;
         case CRUSTY_INSTRUCTION_TYPE_DIV:
             MATH_INSTRUCTION(/)
+            break;
+        case CRUSTY_INSTRUCTION_TYPE_MOD:
+            POPULATE_ARGS
+
+            FETCH_VALS
+
+            if(srcflags == MOVE_FLAG_VAR) {
+                if(cvm->var[srcval].type == CRUSTY_TYPE_FLOAT &&
+                   cvm->var[destval].type != CRUSTY_TYPE_FLOAT) {
+                    cvm->intresult = fmod((double)cvm->intresult, floatoperand);
+                    cvm->resulttype = CRUSTY_TYPE_INT;
+                } else if(cvm->var[srcval].type != CRUSTY_TYPE_FLOAT &&
+                          cvm->var[destval].type == CRUSTY_TYPE_FLOAT) {
+                    cvm->floatresult = fmod(cvm->floatresult, (double)intoperand);
+                    cvm->resulttype = CRUSTY_TYPE_FLOAT;
+                } else if(cvm->var[srcval].type == CRUSTY_TYPE_FLOAT &&
+                          cvm->var[destval].type == CRUSTY_TYPE_FLOAT) {
+                    cvm->floatresult = fmod(cvm->floatresult, floatoperand);
+                    cvm->resulttype = CRUSTY_TYPE_FLOAT;
+                } else { /* both not float */
+                    cvm->intresult = cvm->intresult % intoperand;
+                    cvm->resulttype = CRUSTY_TYPE_INT;
+                }
+            } else {
+                /* immediates can only be ints */
+                if(cvm->var[destval].type == CRUSTY_TYPE_FLOAT) {
+                    cvm->floatresult = fmod(cvm->floatresult, (double)intoperand);
+                    cvm->resulttype = CRUSTY_TYPE_FLOAT;
+                } else {
+                    cvm->intresult = cvm->intresult % intoperand;
+                    cvm->resulttype = CRUSTY_TYPE_INT;
+                }
+            }
+
+            if(store_result(cvm, destval, destindex, destptr) < 0) {
+                break;
+            }
+
+            cvm->ip += MOVE_ARGS + 1;
             break;
         case CRUSTY_INSTRUCTION_TYPE_AND:
             LOGIC_INSTRUCTION(&)

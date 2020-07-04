@@ -221,6 +221,15 @@ add <destination> <source>
 sub <destination> <source>
   Subtract destination and source; see 'add'.
 
+mul <destination> <source>
+  Multiply destination and source; see 'add'.
+
+div <destination> <source>
+  Divide destination and source; see 'add'.
+
+mod <destination> <source>
+  Modulo (remainder) destination and source; see 'add'.
+
 and <destination> <source>
   Binary AND destination and source; see 'add'.
 

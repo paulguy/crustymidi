@@ -1,7 +1,7 @@
 OBJS   = crustyvm.o main.o
 TARGET = crustymidi
 CFLAGS = -Wall -Wextra -Wno-unused-parameter -ggdb
-LDFLAGS = -ljack
+LDFLAGS = -lm -ljack
 
 $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) -o $(TARGET) $(OBJS)

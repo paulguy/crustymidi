@@ -1,2 +1,39 @@
 Examples in this directory are provided for convenience and are all public
 domain.
+
+arpeggiator.cvm
+  Will play any held notes in succession (ascending) based on a particular time.
+  Interval can be overridden by defining INTERVAL on the command line.
+
+major_chord.cvm
+  Plays a major triad for any note input.
+
+mandelbrot.cvm
+  Doesn't work with crustymidi but with testcvm, it'll output an 8 bit output of
+  a mandelbrot set.
+
+metronome.cvm
+  Periodically generates a midi note on and note off event, like a metronome.
+  You can specify BPM on the command line, as well as the output CHANNEL, the
+  NOTE and the note LENgth in milliseconds.
+
+midi.inc
+  Many expr defines and useful macro definitions for the MIDI protocol.  See the
+  file itself for more information.
+
+mididump.cvm
+  Outputs a description of a MIDI event as it's received.  Useful for debugging.
+
+minor_chord.cvm
+  Like major_chord.cvm, plays a minor triad with any input.
+
+push_toggle.cvm
+  Toggles a MIDI note between on and off on any note on event.
+
+split_keyboard.ccm
+  Split a keyboard about middle C in to 2 ports.  Not adapted in to accepting
+  command line arguments, but can be modified.
+
+staccato.cvm
+  Makes all note on events staccato by making all notes 100 ms long.  Also is
+  note adapted to accepting command line arguments.

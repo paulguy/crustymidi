@@ -1,0 +1,80 @@
+include midi.inc
+
+macro SET_DEFAULT VAR VAL COND
+    macro _DO_VAR
+        expr VAR VAL
+    endmacro _DO_VAR
+    expr _SET_VAR COND
+    if _SET_VAR _DO_VAR
+endmacro SET_DEFAULT
+
+SET_DEFAULT BPM 120 "(BPM <= 0)"
+; won't allow to set to 0, but it'll make sure an unset value ends up going to
+; the percussion channel.
+SET_DEFAULT CHANNEL 10 "((CHANNEL < 1) | (CHANNEL > 15))"
+; some kind of tapping noise i guess..?
+SET_DEFAULT NOTE 33 "((NOTE < 1) | (NOTE > 127))"
+SET_DEFAULT LEN 100 "(LEN < 10)"
+
+macro update_rate
+    ; samples per BPM
+    move period rate
+    mul  period 60
+    div  period BPM
+    ; scale to samples per ms
+    move notelen rate
+    mul  notelen LEN
+    div  notelen 1000
+    cmp  notelen period
+    jumpl nofix
+    ; fix note length to always happen before each period
+    move notelen period
+    sub notelen 1
+    
+    label nofix
+endmacro update_rate
+
+static notelen
+static period
+static playing 0
+
+proc init
+    ; call event immediately
+    move timer 0
+ret
+
+proc event
+    local cmd
+
+    cmp data:midi_cmd_idx midi_cmd_timeclock
+    jumpz timer
+    jump end
+    
+    label timer
+        move length midi_note_length
+        move cmd                         CHANNEL
+        move data:midi_note_idx          NOTE
+        move data:midi_note_velocity_idx 127
+        cmp playing 1
+    jumpz note_off
+
+    ;note on
+        or cmd midi_cmd_note_on
+        move playing 1
+
+        ; fire off new timers for next on and off cycle
+        update_rate
+        move timer notelen
+        move timer period
+    jump commit
+
+    label note_off
+        or cmd midi_cmd_note_off
+        move playing 0
+
+    label commit
+        move data:midi_cmd_idx cmd
+        move commit commit_new
+    
+    label end
+ret

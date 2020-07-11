@@ -63,7 +63,7 @@ expr midi_sysex_data 1
 expr midi_timeqframe_length 2
 expr midi_timeqframe_data   1
 
-; song position pointer
+; song position pointer, use midi_dword_(merge|split)
 expr midi_songpos_length    3
 expr midi_songpos_low_idx   1
 expr midi_songpos_high_idx  2

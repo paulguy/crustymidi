@@ -34,7 +34,6 @@ endmacro update_rate
 
 static notelen
 static period
-static playing 0
 
 proc init
     ; call event immediately
@@ -49,31 +48,28 @@ proc event
     jump end
     
     label timer
+        update_rate
+
+        ; note on event
         move length midi_note_length
-        move cmd                         CHANNEL
-        sub  cmd                         1
+        move cmd CHANNEL
+        sub  cmd 1
+        or   cmd midi_cmd_note_on
+        move data:midi_cmd_idx           cmd
         move data:midi_note_idx          NOTE
         move data:midi_note_velocity_idx 127
-        cmp playing 1
-    jumpz note_off
-
-    ;note on
-        or cmd midi_cmd_note_on
-        move playing 1
-
-        ; fire off new timers for next on and off cycle
-        update_rate
-        move timer notelen
-        move timer period
-    jump commit
-
-    label note_off
-        or cmd midi_cmd_note_off
-        move playing 0
-
-    label commit
-        move data:midi_cmd_idx cmd
         move commit commit_new
-    
+
+        ; note off event
+        move cmd CHANNEL
+        sub  cmd 1
+        or   cmd midi_cmd_note_off
+        move data:midi_cmd_idx cmd
+        move time notelen
+        move commit commit_new
+
+        ; fire off next beat
+        move timer period
+ 
     label end
 ret

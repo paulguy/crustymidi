@@ -9,9 +9,7 @@ macro SET_DEFAULT VAR VAL COND
 endmacro SET_DEFAULT
 
 SET_DEFAULT BPM 120 "(BPM <= 0)"
-; won't allow to set to 0, but it'll make sure an unset value ends up going to
-; the percussion channel.
-SET_DEFAULT CHANNEL 10 "((CHANNEL < 1) | (CHANNEL > 15))"
+SET_DEFAULT CHANNEL 10 "((CHANNEL < 1) | (CHANNEL > 16))"
 ; some kind of tapping noise i guess..?
 SET_DEFAULT NOTE 33 "((NOTE < 1) | (NOTE > 127))"
 SET_DEFAULT LEN 100 "(LEN < 10)"
@@ -53,6 +51,7 @@ proc event
     label timer
         move length midi_note_length
         move cmd                         CHANNEL
+        sub  cmd                         1
         move data:midi_note_idx          NOTE
         move data:midi_note_velocity_idx 127
         cmp playing 1

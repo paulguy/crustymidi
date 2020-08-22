@@ -2017,7 +2017,11 @@ static int preprocess(CrustyVM *cvm,
 
                     /* don't copy the next line but make sure it's still evaluated */
                     continue;
+                } else {
+                    foundmacro = 1;
                 }
+            } else {
+                foundmacro = 1;
             }
         }
 

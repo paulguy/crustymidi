@@ -4,7 +4,7 @@ macro MAKE_TRANSLATE MCC VARNAME
     cmp controller MCC
     jumpn skip_MCC
     DX7_SCALE_DEFAULT value
-    DX7_MAKE_PACKET dx7_packet 0 VARNAME value
+    DX7_MAKE_PACKET dx7_packet chan 0 VARNAME value
     jump commit
 label skip_MCC
 endmacro MAKE_TRANSLATE
@@ -15,12 +15,15 @@ ret
 proc event
     local dx7_packet ints dx7_pc_sysex_length
     local cmd
+    local chan
     local controller
     local value
 
-    move cmd data:midi_cmd_idx
-    and  cmd midi_cmd_mask
-    cmp  cmd midi_cmd_cc
+    move cmd  data:midi_cmd_idx
+    move chan cmd
+    and  cmd  midi_cmd_mask
+    and  chan midi_chan_mask
+    cmp  cmd  midi_cmd_cc
     jumpn pass
 
     move controller data:midi_cc_controller_idx

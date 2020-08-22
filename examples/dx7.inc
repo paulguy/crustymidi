@@ -10,34 +10,31 @@ expr dx7_pc_id_val      0x67 ;Yamaha
 expr dx7_pc_ss_val      1    ;parameter change?
 expr dx7_pc_ch_val      0    ;channel number 1
 
-expr dx7_pc_id_idx      "midi_sysex_data + 0"
-expr dx7_pc_ss_idx      "midi_sysex_data + 1"
-expr dx7_pc_ss_shift    4
-expr dx7_pc_ch_idx      "midi_sysex_data + 1"
-expr dx7_pc_pg_idx      "midi_sysex_data + 2"
-expr dx7_pc_pg_shift    2
-expr dx7_pc_param1_idx  "midi_sysex_data + 2"
-expr dx7_pc_param2_idx  "midi_sysex_data + 3"
-expr dx7_pc_data_idx    "midi_sysex_data + 4"
-expr dx7_pc_last_idx    "dx7_pc_sysex_length - 1"
-
-expr dx7_pc_ssch_idx    dx7_pc_ss_idx
-expr dx7_pc_ssch_val    "(dx7_pc_ss_val << dx7_pc_ss_shift) | dx7_pc_ch_val"
+expr dx7_pc_id_idx          "midi_sysex_data + 0"
+expr dx7_pc_ssch_idx        "midi_sysex_data + 1"
+expr dx7_pc_ss_shift        4
+expr dx7_pc_pgparam1_idx    "midi_sysex_data + 2"
+expr dx7_pc_pg_shift        2
+expr dx7_pc_param2_idx      "midi_sysex_data + 3"
+expr dx7_pc_data_idx        "midi_sysex_data + 4"
+expr dx7_pc_last_idx        "dx7_pc_sysex_length - 1"
 
 macro _DX7_MAKE_PACKET
 ;some convoluted bit packing stuff.  PARAM becomes mutated.
-macro DX7_MAKE_PACKET BUF PG PARAM DATA
-    move BUF:midi_cmd_idx       dx7_pc_sysex_type
-    move BUF:dx7_pc_id_idx      dx7_pc_id_val
-    move BUF:dx7_pc_ssch_idx    dx7_pc_ssch_val
-    move BUF:dx7_pc_param2_idx  PARAM
-    move BUF:dx7_pc_last_idx    PARAM
-    shr  BUF:dx7_pc_last_idx    8
-    move BUF:dx7_pc_pg_idx      PG
-    shl  BUF:dx7_pc_pg_idx      dx7_pc_pg_shift
-    or   BUF:dx7_pc_param1_idx  BUF:dx7_pc_last_idx
-    move BUF:dx7_pc_data_idx    DATA
-    move BUF:dx7_pc_last_idx    dx7_pc_sysex_last
+macro DX7_MAKE_PACKET BUF CHAN PG PARAM DATA
+    move BUF:midi_cmd_idx           dx7_pc_sysex_type
+    move BUF:dx7_pc_id_idx          dx7_pc_id_val
+    move BUF:dx7_pc_ssch_idx        dx7_pc_ss_val
+    shl  BUF:dx7_pc_ssch_idx        dx7_pc_ss_shift
+    or   BUF:dx7_pc_ssch_idx        CHAN
+    move BUF:dx7_pc_pgparam1_idx    PARAM
+    move BUF:dx7_pc_last_idx        PARAM
+    shr  BUF:dx7_pc_last_idx        8
+    move BUF:dx7_pc_pgparam1_idx    PG
+    shl  BUF:dx7_pc_pgparam1_idx    dx7_pc_pg_shift
+    or   BUF:dx7_pc_param2_idx      BUF:dx7_pc_last_idx
+    move BUF:dx7_pc_data_idx        DATA
+    move BUF:dx7_pc_last_idx        dx7_pc_sysex_last
 endmacro DX7_MAKE_PACKET
 endmacro _DX7_MAKE_PACKET
 _DX7_MAKE_PACKET

@@ -1759,10 +1759,15 @@ static int preprocess(CrustyVM *cvm,
         /* don't mutate the endmacro line while processing a macro, since it
            could replace substrings causing the macro to never end */
         if(curmacro != NULL &&
-           strcmp(GET_TOKEN(cvm->logline, 0), "endmacro") == 0 &&
-           strcmp(GET_TOKEN(cvm->logline, 1), &(cvm->tokenmem[curmacro->nameOffset])) == 0) {
-            for(i = 0; i < active.tokencount; i++) {
-                active.offset[i] = cvm->line[cvm->logline].offset[i];
+           strcmp(GET_TOKEN(cvm->logline, 0), "endmacro") == 0) {
+            if(active.tokencount != 2) {
+                LOG_PRINTF_TOK(cvm, "endmacro takes a macro name to end.\n");
+                goto failure;
+            }
+            if(strcmp(GET_TOKEN(cvm->logline, 1), &(cvm->tokenmem[curmacro->nameOffset])) == 0) {
+                for(i = 0; i < active.tokencount; i++) {
+                    active.offset[i] = cvm->line[cvm->logline].offset[i];
+                }
             }
         } else {
             /* replace any tokens with tokens containing any possible macro

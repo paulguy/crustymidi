@@ -19,8 +19,6 @@ expr dx7_pc_param2_idx      "midi_sysex_data + 3"
 expr dx7_pc_data_idx        "midi_sysex_data + 4"
 expr dx7_pc_last_idx        "dx7_pc_sysex_length - 1"
 
-macro _DX7_MAKE_PACKET
-;some convoluted bit packing stuff.  PARAM becomes mutated.
 macro DX7_MAKE_PACKET BUF CHAN PG PARAM DATA
     move BUF:midi_cmd_idx           dx7_pc_sysex_type
     move BUF:dx7_pc_id_idx          dx7_pc_id_val
@@ -36,75 +34,145 @@ macro DX7_MAKE_PACKET BUF CHAN PG PARAM DATA
     move BUF:dx7_pc_data_idx        DATA
     move BUF:dx7_pc_last_idx        dx7_pc_sysex_last
 endmacro DX7_MAKE_PACKET
-endmacro _DX7_MAKE_PACKET
-_DX7_MAKE_PACKET
 
 ; parameter group
 expr dx7_pc_pg_voice    0    ;voice
 expr dx7_pc_pg_func     2    ;function
 
-static _DX7_FLOATS floats "0.0 0.0 0.0"
-
-; ugly crap so _DX7_ROUND is available by the time the DX7_SCALE_*
-; macros are being used, ugh.
-macro ___DX7_ROUND
-macro __DX7_ROUND
-; RESULT should be int otherwise it won't work
-macro _DX7_ROUND    ROUND_RESULT ROUND_VAL
-; isolate the floating point component of VAL by copying it to a
-; scratch float value then also to a scratch integer value to trim
-; off the floating value, then take the difference which would be
-; stored as the floating point component.  Scale it to make it 0 to
-; approaching 2, then add, coercing it back to an integer.
-    move _DX7_FLOATS:0 ROUND_VAL
-    move ROUND_RESULT  ROUND_VAL
-    sub  _DX7_FLOATS:0 ROUND_RESULT
-    mul  _DX7_FLOATS:0 2
-    add  ROUND_RESULT  _DX7_FLOATS:0
-endmacro _DX7_ROUND
-endmacro __DX7_ROUND
-__DX7_ROUND
-endmacro ___DX7_ROUND
-___DX7_ROUND
-
-macro _DX7_MAKE_SCALE   NAME INRANGE OUTRANGE
-    macro DX7_SCALE_NAME   SCALE_VAL
-        move       _DX7_FLOATS:0 SCALE_VAL
-        move       _DX7_FLOATS:1 INRANGE
-        move       _DX7_FLOATS:2 OUTRANGE
-        mul        _DX7_FLOATS:0 _DX7_FLOATS:2
-        div        _DX7_FLOATS:0 _DX7_FLOATS:1
-        _DX7_ROUND SCALE_VAL     _DX7_FLOATS:0
-    endmacro DX7_SCALE_NAME
-endmacro _DX7_MAKE_SCALE
-
-expr dx7_param_default_range    99
-_DX7_MAKE_SCALE DEFAULT 127 dx7_param_default_range
-
 ; voice parameters
-macro _DX7_MAKE_OP OPER START
-    expr dx7_voice_opOPER_eg_rate1                "START + 0"
-    expr dx7_voice_opOPER_eg_rate2                "START + 1"
-    expr dx7_voice_opOPER_eg_rate3                "START + 2"
-    expr dx7_voice_opOPER_eg_rate4                "START + 3"
-    expr dx7_voice_opOPER_eg_level1               "START + 4"
-    expr dx7_voice_opOPER_eg_level2               "START + 5"
-    expr dx7_voice_opOPER_eg_level3               "START + 6"
-    expr dx7_voice_opOPER_eg_level4               "START + 7"
-    expr dx7_voice_opOPER_kbd_lev_scl_brk_pt      "START + 8"
-    expr dx7_voice_opOPER_kbd_lev_scl_lft_depth   "START + 9"
-    expr dx7_voice_opOPER_kbd_lev_scl_rht_depth   "START + 10"
-    expr dx7_voice_opOPER_kbd_lev_scl_lft_curve   "START + 11"
-    expr dx7_voice_opOPER_kbd_lev_scl_rht_curve   "START + 12"
-    expr dx7_voice_opOPER_kbd_rate_scaling        "START + 13"
-    expr dx7_voice_opOPER_amp_mod_sensitivity     "START + 14"
-    expr dx7_voice_opOPER_key_vel_sensitivity     "START + 15"
-    expr dx7_voice_opOPER_operator_output_level   "START + 16"
-    expr dx7_voice_opOPER_osc_mode                "START + 17"
-    expr dx7_voice_opOPER_osc_freq_coarse         "START + 18"
-    expr dx7_voice_opOPER_osc_freq_fine           "START + 19"
-    expr dx7_voice_opOPER_osc_detune              "START + 20"
-endmacro _DX7_MAKE_OP
+; OP6 - 0
+expr dx7_voice_opOP6_eg_rate1                0
+expr dx7_voice_opOP6_eg_rate2                1
+expr dx7_voice_opOP6_eg_rate3                2
+expr dx7_voice_opOP6_eg_rate4                3
+expr dx7_voice_opOP6_eg_level1               4
+expr dx7_voice_opOP6_eg_level2               5
+expr dx7_voice_opOP6_eg_level3               6
+expr dx7_voice_opOP6_eg_level4               7
+expr dx7_voice_opOP6_kbd_lev_scl_brk_pt      8
+expr dx7_voice_opOP6_kbd_lev_scl_lft_depth   9
+expr dx7_voice_opOP6_kbd_lev_scl_rht_depth   10
+expr dx7_voice_opOP6_kbd_lev_scl_lft_curve   11
+expr dx7_voice_opOP6_kbd_lev_scl_rht_curve   12
+expr dx7_voice_opOP6_kbd_rate_scaling        13
+expr dx7_voice_opOP6_amp_mod_sensitivity     14
+expr dx7_voice_opOP6_key_vel_sensitivity     15
+expr dx7_voice_opOP6_operator_output_level   16
+expr dx7_voice_opOP6_osc_mode                17
+expr dx7_voice_opOP6_osc_freq_coarse         18
+expr dx7_voice_opOP6_osc_freq_fine           19
+expr dx7_voice_opOP6_osc_detune              20
+; OP5 - 21
+expr dx7_voice_opOP5_eg_rate1                21
+expr dx7_voice_opOP5_eg_rate2                22
+expr dx7_voice_opOP5_eg_rate3                23
+expr dx7_voice_opOP5_eg_rate4                24
+expr dx7_voice_opOP5_eg_level1               25
+expr dx7_voice_opOP5_eg_level2               26
+expr dx7_voice_opOP5_eg_level3               27
+expr dx7_voice_opOP5_eg_level4               28
+expr dx7_voice_opOP5_kbd_lev_scl_brk_pt      29
+expr dx7_voice_opOP5_kbd_lev_scl_lft_depth   30
+expr dx7_voice_opOP5_kbd_lev_scl_rht_depth   31
+expr dx7_voice_opOP5_kbd_lev_scl_lft_curve   32
+expr dx7_voice_opOP5_kbd_lev_scl_rht_curve   33
+expr dx7_voice_opOP5_kbd_rate_scaling        34
+expr dx7_voice_opOP5_amp_mod_sensitivity     35
+expr dx7_voice_opOP5_key_vel_sensitivity     36
+expr dx7_voice_opOP5_operator_output_level   37
+expr dx7_voice_opOP5_osc_mode                38
+expr dx7_voice_opOP5_osc_freq_coarse         39
+expr dx7_voice_opOP5_osc_freq_fine           40
+expr dx7_voice_opOP5_osc_detune              41
+; OP4 - 42
+expr dx7_voice_opOP4_eg_rate1                42
+expr dx7_voice_opOP4_eg_rate2                43
+expr dx7_voice_opOP4_eg_rate3                44
+expr dx7_voice_opOP4_eg_rate4                45
+expr dx7_voice_opOP4_eg_level1               46
+expr dx7_voice_opOP4_eg_level2               47
+expr dx7_voice_opOP4_eg_level3               48
+expr dx7_voice_opOP4_eg_level4               49
+expr dx7_voice_opOP4_kbd_lev_scl_brk_pt      50
+expr dx7_voice_opOP4_kbd_lev_scl_lft_depth   51
+expr dx7_voice_opOP4_kbd_lev_scl_rht_depth   52
+expr dx7_voice_opOP4_kbd_lev_scl_lft_curve   53
+expr dx7_voice_opOP4_kbd_lev_scl_rht_curve   54
+expr dx7_voice_opOP4_kbd_rate_scaling        55
+expr dx7_voice_opOP4_amp_mod_sensitivity     56
+expr dx7_voice_opOP4_key_vel_sensitivity     57
+expr dx7_voice_opOP4_operator_output_level   58
+expr dx7_voice_opOP4_osc_mode                59
+expr dx7_voice_opOP4_osc_freq_coarse         60
+expr dx7_voice_opOP4_osc_freq_fine           61
+expr dx7_voice_opOP4_osc_detune              62
+; OP3 - 63
+expr dx7_voice_opOP3_eg_rate1                63
+expr dx7_voice_opOP3_eg_rate2                64
+expr dx7_voice_opOP3_eg_rate3                65
+expr dx7_voice_opOP3_eg_rate4                66
+expr dx7_voice_opOP3_eg_level1               67
+expr dx7_voice_opOP3_eg_level2               68
+expr dx7_voice_opOP3_eg_level3               69
+expr dx7_voice_opOP3_eg_level4               70
+expr dx7_voice_opOP3_kbd_lev_scl_brk_pt      71
+expr dx7_voice_opOP3_kbd_lev_scl_lft_depth   72
+expr dx7_voice_opOP3_kbd_lev_scl_rht_depth   73
+expr dx7_voice_opOP3_kbd_lev_scl_lft_curve   74
+expr dx7_voice_opOP3_kbd_lev_scl_rht_curve   75
+expr dx7_voice_opOP3_kbd_rate_scaling        76
+expr dx7_voice_opOP3_amp_mod_sensitivity     77
+expr dx7_voice_opOP3_key_vel_sensitivity     78
+expr dx7_voice_opOP3_operator_output_level   79
+expr dx7_voice_opOP3_osc_mode                80
+expr dx7_voice_opOP3_osc_freq_coarse         81
+expr dx7_voice_opOP3_osc_freq_fine           82
+expr dx7_voice_opOP3_osc_detune              83
+; OP2 - 84
+expr dx7_voice_opOP2_eg_rate1                84
+expr dx7_voice_opOP2_eg_rate2                85
+expr dx7_voice_opOP2_eg_rate3                86
+expr dx7_voice_opOP2_eg_rate4                87
+expr dx7_voice_opOP2_eg_level1               88
+expr dx7_voice_opOP2_eg_level2               89
+expr dx7_voice_opOP2_eg_level3               90
+expr dx7_voice_opOP2_eg_level4               91
+expr dx7_voice_opOP2_kbd_lev_scl_brk_pt      92
+expr dx7_voice_opOP2_kbd_lev_scl_lft_depth   93
+expr dx7_voice_opOP2_kbd_lev_scl_rht_depth   94
+expr dx7_voice_opOP2_kbd_lev_scl_lft_curve   95
+expr dx7_voice_opOP2_kbd_lev_scl_rht_curve   96
+expr dx7_voice_opOP2_kbd_rate_scaling        97
+expr dx7_voice_opOP2_amp_mod_sensitivity     98
+expr dx7_voice_opOP2_key_vel_sensitivity     99
+expr dx7_voice_opOP2_operator_output_level   100
+expr dx7_voice_opOP2_osc_mode                101
+expr dx7_voice_opOP2_osc_freq_coarse         102
+expr dx7_voice_opOP2_osc_freq_fine           103
+expr dx7_voice_opOP2_osc_detune              104
+; OP1 - 105
+expr dx7_voice_opOP1_eg_rate1                105
+expr dx7_voice_opOP1_eg_rate2                106
+expr dx7_voice_opOP1_eg_rate3                107
+expr dx7_voice_opOP1_eg_rate4                108
+expr dx7_voice_opOP1_eg_level1               109
+expr dx7_voice_opOP1_eg_level2               110
+expr dx7_voice_opOP1_eg_level3               111
+expr dx7_voice_opOP1_eg_level4               112
+expr dx7_voice_opOP1_kbd_lev_scl_brk_pt      113
+expr dx7_voice_opOP1_kbd_lev_scl_lft_depth   114
+expr dx7_voice_opOP1_kbd_lev_scl_rht_depth   115
+expr dx7_voice_opOP1_kbd_lev_scl_lft_curve   116
+expr dx7_voice_opOP1_kbd_lev_scl_rht_curve   117
+expr dx7_voice_opOP1_kbd_rate_scaling        118
+expr dx7_voice_opOP1_amp_mod_sensitivity     119
+expr dx7_voice_opOP1_key_vel_sensitivity     120
+expr dx7_voice_opOP1_operator_output_level   121
+expr dx7_voice_opOP1_osc_mode                122
+expr dx7_voice_opOP1_osc_freq_coarse         123
+expr dx7_voice_opOP1_osc_freq_fine           124
+expr dx7_voice_opOP1_osc_detune              125
+
 ; may look like a typo but the original document listed it this way
 expr dx7_voice_op_kbd_lev_scl_curve_neg_lin     0
 expr dx7_voice_op_kbd_lev_scl_curve_neg_exp     1
@@ -113,29 +181,6 @@ expr dx7_voice_op_kbd_lev_scl_curve_pos_lin     3
 
 expr dx7_voice_op_osc_mode_ratio    0
 expr dx7_voice_op_osc_mode_fixed    1
-
-expr dx7_voice_op_kbd_lev_scl_curve_range   3
-expr dx7_voice_op_kbd_rate_scaling_range    7
-expr dx7_voice_op_amp_mod_sensitivity_range 3
-expr dx7_voice_op_key_vel_sensitivity_range 7
-expr dx7_voice_op_osc_mode_range            1
-expr dx7_voice_op_osc_freq_coarse_range     31
-expr dx7_voice_op_osc_detune_range          14
-
-_DX7_MAKE_SCALE OP_KBD_LEV_SCL_CURVE   127 dx7_voice_op_kbd_lev_scl_curve_range
-_DX7_MAKE_SCALE OP_KBD_RATE_SCALING    127 dx7_voice_op_kbd_rate_scaling_range
-_DX7_MAKE_SCALE OP_AMP_MOD_SENSITIVITY 127 dx7_voice_op_amp_mod_sensitivity_range
-_DX7_MAKE_SCALE OP_KEY_VEL_SENSITIVITY 127 dx7_voice_op_key_vel_sentivitity_range
-_DX7_MAKE_SCALE OP_OSC_MODE            127 dx7_voice_op_osc_mode_range
-_DX7_MAKE_SCALE OP_OSC_FREQ_COARSE     127 dx7_voice_op_osc_freq_coarse_range
-_DX7_MAKE_SCALE OP_OSC_DETUNE          127 dx7_voice_op_osc_detune_range
-
-_DX7_MAKE_OP 6   0
-_DX7_MAKE_OP 5  21
-_DX7_MAKE_OP 4  42
-_DX7_MAKE_OP 3  63
-_DX7_MAKE_OP 2  84
-_DX7_MAKE_OP 1 105
 
 expr dx7_voice_pitch_eg_rate1                   126
 expr dx7_voice_pitch_eg_rate2                   127
@@ -182,24 +227,7 @@ expr dx7_voice_operator_onoff_op4   0x04
 expr dx7_voice_operator_onoff_op5   0x02
 expr dx7_voice_operator_onoff_op6   0x01
 
-expr dx7_voice_algorithm_no_range           31
-expr dx7_voice_feedback_range               7
-expr dx7_voice_oscillator_sync_range        1
-expr dx7_voice_lfo_sync_range               1
-expr dx7_voice_lfo_waveform_range           5
-expr dx7_voice_pitch_mod_sensitivity_range  7
-expr dx7_voice_transpose_range              48
-expr dx7_voice_operator_onoff_range         63
-
-_DX7_MAKE_SCALE ALGORITHM_NO            127 dx7_voice_algorithm_no_range
-_DX7_MAKE_SCALE FEEDBACK                127 dx7_voice_feedback_range
-_DX7_MAKE_SCALE OSCILLATOR_SYNC         127 dx7_voice_oscillator_sync_range
-_DX7_MAKE_SCALE LFO_SYNC                127 dx7_voice_lfo_sync_range
-_DX7_MAKE_SCALE LFO_WAVEFORM            127 dx7_voice_lfo_waveform_range
-_DX7_MAKE_SCALE PITCH_MOD_SENSITIVITY   127 dx7_voice_pitch_mod_sensitivity_range
-_DX7_MAKE_SCALE TRANSPOSE               127 dx7_voice_transpose_range
-_DX7_MAKE_SCALE OPERATOR_ONOFF          127 dx7_voice_operator_onoff_range
-
+; function parameters
 expr dx7_func_mono_mode             64
 expr dx7_func_pitch_bend_range      65
 expr dx7_func_pitch_bend_step       66
@@ -214,3 +242,51 @@ expr dx7_func_breath_cont_range     74
 expr dx7_func_breath_cont_assign    75
 expr dx7_func_aftertouch_range      76
 expr dx7_func_aftertouch_assign     77
+
+static _DX7_SCALETABLE ints "\
+    99 99 99 99 99 99 99 99\
+    99 99 99  3  3  7  3  7\
+    99  1 31 99 14\
+    99 99 99 99 99 99 99 99\
+    99 99 99  3  3  7  3  7\
+    99  1 31 99 14\
+    99 99 99 99 99 99 99 99\
+    99 99 99  3  3  7  3  7\
+    99  1 31 99 14\
+    99 99 99 99 99 99 99 99\
+    99 99 99  3  3  7  3  7\
+    99  1 31 99 14\
+    99 99 99 99 99 99 99 99\
+    99 99 99  3  3  7  3  7\
+    99  1 31 99 14\
+    99 99 99 99 99 99 99 99\
+    99 99 99  3  3  7  3  7\
+    99  1 31 99 14\
+    99 99 99 99 99 99 99 99\
+    31  7  1 99 99 99 99  1\
+     5  7 48\
+    127 127 127 127 127 127 127 127 127 127\
+    63"
+
+static _DX7_FLOATS floats "0.0 0.0 0.0"
+macro DX7_SCALE PARAM VALUE UNIQUE
+    cmp   _DX7_SCALETABLE:PARAM 127
+    jumpz noscale_UNIQUE
+    move _DX7_FLOATS:0 VALUE
+    move _DX7_FLOATS:1 127
+    move _DX7_FLOATS:2 _DX7_SCALETABLE:PARAM
+    mul  _DX7_FLOATS:0 _DX7_FLOATS:2
+    div  _DX7_FLOATS:0 _DX7_FLOATS:1
+
+; crappy rounding algorithm!
+; isolate the floating point component of VAL by copying it to a
+; scratch float value then also to a scratch integer value to trim
+; off the floating value, then take the difference which would be
+; stored as the floating point component.  Scale it to make it 0 to
+; approaching 2, then add, coercing it back to an integer.
+    move VALUE         _DX7_FLOATS:0
+    sub  _DX7_FLOATS:0 VALUE
+    mul  _DX7_FLOATS:0 2
+    add  VALUE         _DX7_FLOATS:0
+label noscale_UNIQUE
+endmacro DX7_SCALE

@@ -48,6 +48,6 @@ cc_to_dx7.cvm
   Translate midi CC messages to Yamaha DX7 voice parameter change messages.
   What maps to what is defined on the command line with -DCC_###=# where ###
   is the CC from 000 to 127 and # is the parameter number, typically from 0
-  to 156.  No bounds or range checking or scaling is done.  This is just an
-  early preliminary test and things may end up rewritten at a later time to be
-  more featureful and robust.
+  to 156.  -DCC_###_UNSCALED=# may also be used to force directly passing the
+  CC value along to the parameter value for direct data entry, otherwise all
+  values passed through will be scaled down to their accepted range.

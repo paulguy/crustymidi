@@ -155,7 +155,7 @@ proc event
     if CC_126 MAKE_TRANSLATE 126 CC_126
     if CC_127 MAKE_TRANSLATE 127 CC_127
    
-    jump end
+    jump pass
 label commit
     move length dx7_pc_sysex_length
     move data:0 dx7_packet:0

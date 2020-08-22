@@ -1775,6 +1775,15 @@ static int preprocess(CrustyVM *cvm,
             for(i = 0; i < active.tokencount; i++) {
                 active.offset[i] = cvm->line[cvm->logline].offset[i];
                 for(j = 0; j < inVars; j++) {
+                    /* first part of a hack to prevent a -D parameter
+                     * on the command line becoming "undefined" */
+                    if(i == 1 &&
+                       strcmp(GET_ACTIVE(0), "if") == 0 &&
+                       strcmp(GET_ACTIVE(1),
+                              &(cvm->tokenmem[inVar[j]])) == 0 &&
+                       strcmp(&(cvm->tokenmem[inValue[j]]), "0") == 0) {
+                        continue;
+                    }
                     tokenstart = string_replace(cvm,
                                                 active.offset[i],
                                                 inVar[j],
@@ -1914,12 +1923,28 @@ static int preprocess(CrustyVM *cvm,
                         goto failure;
                     }
 
-                    char *endchar;
-                    int num;
-                    num = strtol(GET_ACTIVE(1), &endchar, 0);
-                    /* check that the entire string was valid and that the
-                       result was not zero */
-                    if(GET_ACTIVE(1)[0] != '\0' && *endchar == '\0' && num != 0) {
+                    int dothing = 0;
+                    /* second part of hack to check to see if a
+                     * condition variable was defined on the command
+                     * line, regardless of it being 0 */
+                    for(j = 0; j < inVars; j++) {
+                        if(strcmp(GET_ACTIVE(1),
+                                  &(cvm->tokenmem[inVar[j]])) == 0) {
+                            dothing = 1;
+                            break;
+                        }
+                    }
+                    if(!dothing) {
+                        char *endchar;
+                        int num;
+                        num = strtol(GET_ACTIVE(1), &endchar, 0);
+                        /* check that the entire string was valid and that the
+                           result was not zero */
+                        if(GET_ACTIVE(1)[0] != '\0' && *endchar == '\0' && num != 0) {
+                            dothing = 1;
+                        }
+                    }
+                    if(dothing) {
                         /* move everything over 2 */
                         for(j = 2; j < active.tokencount; j++) {
                             cvm->line[cvm->logline].offset[j - 2] =

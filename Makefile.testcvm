@@ -4,7 +4,7 @@ CFLAGS = -DCRUSTY_TEST -Wall -Wextra -D_FILE_OFFSET_BITS=64 -ggdb
 LDFLAGS = -lm
 
 $(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $(TARGET) $(OBJS)
+	$(CC) -o $(TARGET) $(OBJS) $(LDFLAGS)
 
 all: $(TARGET)
 

@@ -4,7 +4,7 @@ CFLAGS = -Wall -Wextra -Wno-unused-parameter -ggdb
 LDFLAGS = -lm -ljack
 
 $(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $(TARGET) $(OBJS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS) $(LDFLAGS)
 
 all: $(TARGET)
 

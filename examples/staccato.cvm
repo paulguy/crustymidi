@@ -13,7 +13,7 @@ macro update_rate
     move rateint rate
     mul rateint interval
     div rateint 1000
-    ; move debug_print_int rateint
+    ; move out rateint
 endmacro update_rate
 
 proc init
@@ -44,14 +44,14 @@ proc event
     jump commit
 
     label note_on
-        move debug_print_int note
+        move out note
         ; if a note is playing, don't process another
         cmp note -1
         jumpg end
 
         ; store note to stop and set up timer to stop the note
         move note data:midi_note_idx
-        move debug_print_int note
+        move out note
         update_rate
         move timer rateint
         ; let the started note be committed
@@ -61,7 +61,7 @@ proc event
     jump end
 
     label timer
-        move debug_print_int note
+        move out note
         ; shouldn't happen but don't try to do something if it does
         cmp note 0
         jumpl end

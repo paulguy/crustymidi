@@ -439,6 +439,69 @@ void cleanup_and_exit(int signum) {
     exit(EXIT_SUCCESS);
 }
 
+/* silly things to use as flags because stderr/stdout aren't usable as pointers
+ * on their own. */
+int CRUSTY_STDOUT = 0;
+int CRUSTY_STDERR = 1;
+
+/* general debug output things */
+int write_to(void *priv,
+             CrustyType type,
+             unsigned int size,
+             void *ptr,
+             unsigned int index) {
+    FILE *out;
+    if(priv == &CRUSTY_STDOUT) {
+        out = stdout;
+    } else {
+        out = stderr;
+    }
+
+    switch(type) {
+        case CRUSTY_TYPE_CHAR:
+            fprintf(out, "%c", *(char *)ptr);
+            break;
+        case CRUSTY_TYPE_INT:
+            fprintf(out, "%d", *(int *)ptr);
+            break;
+        case CRUSTY_TYPE_FLOAT:
+            fprintf(out, "%g", *(double *)ptr);
+            break;
+        default:
+            fprintf(stderr, "Unknown type for printing.\n");
+            return(-1);
+    }
+
+    return(0);
+}
+
+int write_string_to(void *priv,
+                    CrustyType type,
+                    unsigned int size,
+                    void *ptr,
+                    unsigned int index) {
+    FILE *out;
+
+    if(type != CRUSTY_TYPE_CHAR) {
+        fprintf(stderr, "Attempt to print non-string.\n");
+        return(-1);
+    }
+
+    if(priv == &CRUSTY_STDOUT) {
+        out = stdout;
+    } else {
+        out = stderr;
+    }
+
+    if(fwrite((char *)ptr, 1, size, out) < size) {
+        fprintf(stderr, "Failed to print string.\n");
+        return(-1);
+    }
+
+    return(0);
+}
+
+
 int getlength(void *priv, void *val, unsigned int index) {
     *(int *)val = tctx.curEv->size;
 
@@ -475,8 +538,20 @@ int getrate(void *priv, void *val, unsigned int index) {
     return(0);
 }
 
-int setlength(void *priv, void *val, unsigned int index) {
-    int intval = *(int *)val;
+int setlength(void *priv,
+              CrustyType type,
+              unsigned int size,
+              void *ptr,
+              unsigned int index) {
+    int intval;
+
+    if(type == CRUSTY_TYPE_INT) {
+        intval = *(int *)ptr;
+    } else if(type == CRUSTY_TYPE_CHAR) {
+        intval = *(char *)ptr;
+    } else {
+        intval = *(double *)ptr;
+    }
 
     if(intval < 0 || intval > MAX_BUFFER_SIZE) {
         return(-1);
@@ -492,18 +567,40 @@ int setlength(void *priv, void *val, unsigned int index) {
     return(0);
 }
 
-int setdata(void *priv, void *val, unsigned int index) {
+int setdata(void *priv,
+            CrustyType type,
+            unsigned int size,
+            void *ptr,
+            unsigned int index) {
     if(index > tctx.outLen) {
         return(-1);
     }
 
-    tctx.outBuff[index] = *(int *)val;
+    if(type == CRUSTY_TYPE_INT) {
+        tctx.outBuff[index] = *(int *)ptr;
+    } else if(type == CRUSTY_TYPE_CHAR) {
+        tctx.outBuff[index] = *(char *)ptr;
+    } else {
+        tctx.outBuff[index] = *(double *)ptr;
+    }
 
     return(0);
 }
 
-int settime(void *priv, void *val, unsigned int index) {
-    int intval = *(int *)val;
+int settime(void *priv,
+            CrustyType type,
+            unsigned int size,
+            void *ptr,
+            unsigned int index) {
+    int intval;
+
+    if(type == CRUSTY_TYPE_INT) {
+        intval = *(int *)ptr;
+    } else if(type == CRUSTY_TYPE_CHAR) {
+        intval = *(char *)ptr;
+    } else {
+        intval = *(double *)ptr;
+    }
 
     /* can't schedule for a time in the past */
     if(intval < 0) {
@@ -515,8 +612,20 @@ int settime(void *priv, void *val, unsigned int index) {
     return(0);
 }
 
-int setport(void *priv, void *val, unsigned int index) {
-    int intval = *(int *)val;
+int setport(void *priv,
+            CrustyType type,
+            unsigned int size,
+            void *ptr,
+            unsigned int index) {
+    int intval;
+
+    if(type == CRUSTY_TYPE_INT) {
+        intval = *(int *)ptr;
+    } else if(type == CRUSTY_TYPE_CHAR) {
+        intval = *(char *)ptr;
+    } else {
+        intval = *(double *)ptr;
+    }
 
     /* can't schedule for a time in the past */
     if(intval < 0 || (unsigned int)intval > tctx.outports) {
@@ -528,9 +637,23 @@ int setport(void *priv, void *val, unsigned int index) {
     return(0);
 }
 
-int commit(void *priv, void *val, unsigned int index) {
+int commit(void *priv,
+           CrustyType type,
+           unsigned int size,
+           void *ptr,
+           unsigned int index) {
+    int intval;
+
+    if(type == CRUSTY_TYPE_INT) {
+        intval = *(int *)ptr;
+    } else if(type == CRUSTY_TYPE_CHAR) {
+        intval = *(char *)ptr;
+    } else {
+        intval = *(double *)ptr;
+    }
+
     /* write nonzero to pass value */
-    if(*(int *)val == 0) {
+    if(intval == 0) {
         if(tctx.curEv == NULL) { /* no current event during init */
             return(-1);
         }
@@ -558,8 +681,20 @@ int commit(void *priv, void *val, unsigned int index) {
     return(0);
 }
 
-int timer(void *priv, void *val, unsigned int index) {
-    int intval = *(int *)val;
+int timer(void *priv,
+          CrustyType type,
+          unsigned int size,
+          void *ptr,
+          unsigned int index) {
+    int intval;
+
+    if(type == CRUSTY_TYPE_INT) {
+        intval = *(int *)ptr;
+    } else if(type == CRUSTY_TYPE_CHAR) {
+        intval = *(char *)ptr;
+    } else {
+        intval = *(double *)ptr;
+    }
 
     if(intval < 0) {
         return(-1);
@@ -584,16 +719,6 @@ int timer(void *priv, void *val, unsigned int index) {
         }
     }
 
-    return(0);
-}
-
-int print_int(void *priv, void *value, unsigned int index) {
-    fprintf((FILE *)priv, "%d", *(int *)value);
-    return(0);
-}
-
-int print_chr(void *priv, void *value, unsigned int index) {
-    fprintf((FILE *)priv, "%c", *(char *)value);
     return(0);
 }
 
@@ -737,6 +862,7 @@ void free_portnames(unsigned int inports, unsigned int outports,
 int main(int argc, char **argv) {
     /* general stuff */
     const char *filename = NULL;
+    char *fullpath;
     unsigned int i;
     unsigned int arglen;
     char *equals;
@@ -764,57 +890,66 @@ int main(int argc, char **argv) {
     CrustyCallback cb[] = {
         /* print functions may cause underruns/crackles */
         {
-            .name = "print_chr", .length = 1, .type = CRUSTY_TYPE_INT,
-            .read  = NULL, .readpriv  = NULL,
-            .write = print_chr, .writepriv = stdout
+            .name = "out", .length = 1, .readType = CRUSTY_TYPE_NONE,
+            .read = NULL, .readpriv = NULL,
+            .write = write_to, .writepriv = &CRUSTY_STDOUT
         },
         {
-            .name = "print_int", .length = 1, .type = CRUSTY_TYPE_INT,
-            .read  = NULL, .readpriv  = NULL,
-            .write = print_int, .writepriv = stdout
+            .name = "err", .length = 1, .readType = CRUSTY_TYPE_NONE,
+            .read = NULL, .readpriv = NULL,
+            .write = write_to, .writepriv = &CRUSTY_STDERR
         },
         {
-            .name = "debug_print_chr", .length = 1, .type = CRUSTY_TYPE_INT,
-            .read  = NULL, .readpriv  = NULL,
-            .write = print_chr, .writepriv = stderr
+            .name = "string_out",
+            .length = 1, .readType = CRUSTY_TYPE_NONE,
+            .read = NULL, .readpriv = NULL,
+            .write = write_string_to, .writepriv = &CRUSTY_STDOUT
         },
         {
-            .name = "debug_print_int", .length = 1, .type = CRUSTY_TYPE_INT,
-            .read  = NULL, .readpriv  = NULL,
-            .write = print_int, .writepriv = stderr
+            .name = "string_err",
+            .length = 1, .readType = CRUSTY_TYPE_NONE,
+            .read = NULL, .readpriv = NULL,
+            .write = write_string_to, .writepriv = &CRUSTY_STDERR
         },
         {
-            .name = "length", .length = 1, .type = CRUSTY_TYPE_INT,
+            .name = "length", .length = 1,
+            .readType = CRUSTY_TYPE_INT,
             .read  = getlength, .readpriv  = NULL,
             .write = setlength, .writepriv = NULL
         },
         {
-            .name = "data", .length = MAX_BUFFER_SIZE, .type = CRUSTY_TYPE_INT,
+            .name = "data", .length = MAX_BUFFER_SIZE,
+            .readType = CRUSTY_TYPE_INT,
             .read  = getdata, .readpriv  = NULL,
             .write = setdata, .writepriv = NULL
         },
         {
-            .name = "time", .length = 1, .type = CRUSTY_TYPE_INT,
+            .name = "time", .length = 1,
+            .readType = CRUSTY_TYPE_INT,
             .read = gettime,  .readpriv  = NULL,
             .write = settime, .writepriv = NULL
         },
         {
-            .name = "port", .length = 1, .type = CRUSTY_TYPE_INT,
+            .name = "port", .length = 1,
+            .readType = CRUSTY_TYPE_INT,
             .read = getport,  .readpriv  = NULL,
             .write = setport, .writepriv = NULL
         },
         {
-            .name = "rate", .length = 1, .type = CRUSTY_TYPE_INT,
+            .name = "rate", .length = 1,
+            .readType = CRUSTY_TYPE_INT,
             .read  = getrate, .readpriv  = NULL,
             .write = NULL,    .writepriv = NULL
         },
         {
-            .name = "commit", .length = 1, .type = CRUSTY_TYPE_INT,
+            .name = "commit", .length = 1,
+            .readType = CRUSTY_TYPE_NONE,
             .read  = NULL,   .readpriv  = NULL,
             .write = commit, .writepriv = NULL
         },
         {
-            .name = "timer", .length = 1, .type = CRUSTY_TYPE_INT,
+            .name = "timer", .length = 1,
+            .readType = CRUSTY_TYPE_NONE,
             .read  = NULL,   .readpriv  = NULL,
             .write = timer,  .writepriv = NULL
         }
@@ -900,6 +1035,14 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
+    fullpath = NULL;
+    in = crustyvm_open_file(filename, &fullpath, vprintf_cb, stderr);
+    if(in == NULL) {
+        fprintf(stderr, "Failed to open file %s.\n", filename);
+        CLEAN_ARGS
+        exit(EXIT_FAILURE);
+    }
+
     in = fopen(filename, "rb");
     if(in == NULL) {
         fprintf(stderr, "Failed to open file %s.\n", filename);
@@ -944,7 +1087,8 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
-    tctx.cvm = crustyvm_new(argv[1], program, len,
+    tctx.cvm = crustyvm_new(filename, fullpath,
+                            program, len,
                             CRUSTY_FLAG_DEFAULTS
                             /* | CRUSTY_FLAG_TRACE */,
                             0,

@@ -20,16 +20,16 @@ macro update_rate
     move rateint rate
     mul rateint interval
     div rateint 1000
-    ; move debug_print_int rateint
+    ; move out rateint
 endmacro update_rate
 
 macro debug_print uniq
-    move debug_print_int listlen
+    move out listlen
     cmp listlen 0
     jumpz debug_print_end_uniq
     move i 0
     label debug_print_loop_uniq
-        move debug_print_int notelist:i
+        move out notelist:i
         add i 1
         cmp i listlen
     jumpl debug_print_loop_uniq

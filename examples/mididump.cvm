@@ -1,7 +1,7 @@
 include midi.inc
 
-expr spacechr   32
-expr newlinechr 10
+static spacechr string " "
+static newlinechr string "\n"
 
 static hexdigits  string "0123456789ABCDEF"
 static notes  string "CCDDEFFGGAAB"
@@ -37,26 +37,14 @@ static str_progch     string "Program Change (0xCn)\n"
 static str_chantouch  string "Channel Aftertouch (0xDn)\n"
 static str_pitchbend  string "Pitchbend (0xEn)\n"
 
-proc printstr str
-    local i 0
-
-    label loop
-        cmp i str:
-        jumpz endloop
-        move print_chr str:i
-        add i 1
-    jump loop
-    label endloop
-ret
-
 macro printhex8 val
     move temp val
     and  temp 0xF0
     shr  temp 4
-    move print_chr hexdigits:temp
+    move out hexdigits:temp
     move temp val
     and  temp 0x0F
-    move print_chr hexdigits:temp
+    move out hexdigits:temp
 endmacro printhex8
 
 proc hexdump buffer len
@@ -67,7 +55,7 @@ proc hexdump buffer len
         cmp i len
         jumpz endloop
         printhex8 buffer:i
-        move print_chr spacechr
+        move out spacechr
         add i 1
     jump loop
     label endloop
@@ -84,9 +72,9 @@ proc printnote note
     move temp note
     mod  temp 12
 
-    move print_chr notes:temp
-    move print_chr sharps:temp
-    move print_int octave
+    move out notes:temp
+    move out sharps:temp
+    move out octave
 ret
 
 proc init
@@ -103,9 +91,9 @@ proc event
     move commit commit_pass
 
     ; Time: {}\n
-    call printstr  str_time
-    move print_int time
-    move print_chr newlinechr
+    move string_out str_time
+    move out time
+    move out newlinechr
 
     move cmd data:midi_cmd_idx
 
@@ -139,9 +127,9 @@ proc event
     and  chan midi_chan_mask
     and  cmd  midi_cmd_mask
 
-    call printstr str_chan
-    move print_int chan
-    move print_chr newlinechr
+    move string_out str_chan
+    move out chan
+    move out newlinechr
 
     cmp cmd midi_cmd_note_off
     jumpz note_off
@@ -159,7 +147,7 @@ proc event
     jumpz pitchbend
 
     ; unrecognized command
-    call printstr str_unrec
+    move string_out str_unrec
     call hexdump data length
     jump end
 
@@ -168,145 +156,145 @@ proc event
         sub len midi_sysex_data
 
         ; System Exclusive (0xF0)\nLength: {len}\n
-        call printstr  str_sysex
-        call printstr  str_length
-        move print_int len
-        move print_chr newlinechr
+        move string_out str_sysex
+        move string_out str_length
+        move out len
+        move out newlinechr
 
         ; Data: ...\n
-        call printstr  str_data
-        call hexdump   data:midi_sysex_data len
-        move print_chr newlinechr
+        move string_out str_data
+        call hexdump data:midi_sysex_data len
+        move out newlinechr
     jump end
 
     label timeqframe
         midi_timeqframe_split type value data:midi_timeqframe_data
 
         ; Time Code Quarter Frame (0xF1)\nType: {type}\nValue: {value}\n
-        call printstr  str_timeqframe
-        call printstr  str_type
-        move print_int type
-        move print_chr newlinechr
-        call printstr  str_value
-        move print_int value
-        move print_chr newlinechr
+        move string_out str_timeqframe
+        move string_out str_type
+        move out type
+        move out newlinechr
+        move string_out str_value
+        move out value
+        move out newlinechr
     jump end
 
     label songpos
         midi_dword_merge value data:midi_songpos_low_idx data:midi_songpos_high_idx
 
         ; Song Position (0xF2): {value}\n
-        call printstr  str_songpos
-        move print_int value
-        move print_chr newlinechr
+        move string_out str_songpos
+        move out value
+        move out newlinechr
     jump end
 
     label songsel
         ; Song Select (0xF3): {}\n
-        call printstr  str_songsel
-        move print_int data:midi_songsel_song_idx
-        move print_chr newlinechr
+        move string_out str_songsel
+        move out data:midi_songsel_song_idx
+        move out newlinechr
     jump end
 
     label tunereq
-        call printstr str_tunereq
+        move string_out str_tunereq
     jump end
 
     label timeclock
-        call printstr str_timeclock
+        move string_out str_timeclock
     jump end
     
     label start
-        call printstr str_start
+        move string_out str_start
     jump end
 
     label continue
-        call printstr str_continue
+        move string_out str_continue
     jump end
 
     label stop
-        call printstr str_stop
+        move string_out str_stop
     jump end
 
     label sense
-        call printstr str_sense
+        move string_out str_sense
     jump end
 
     label reset
-        call printstr str_reset
+        move string_out str_reset
     jump end
 
     label note_off
         ; Note Off (0x8n)\nNote: {} {}\nVelocity: {}\n
-        call printstr  str_noteoff
-        call printstr  str_note
-        move print_int data:midi_note_idx
-        move print_chr spacechr
+        move string_out str_noteoff
+        move string_out str_note
+        move out data:midi_note_idx
+        move out spacechr
         call printnote data:midi_note_idx
-        move print_chr newlinechr
-        call printstr  str_velocity
-        move print_int data:midi_velocity_idx
-        move print_chr newlinechr
+        move out newlinechr
+        move string_out str_velocity
+        move out data:midi_velocity_idx
+        move out newlinechr
     jump end
 
     label note_on
         ; Note On (0x9n)\nNote: {} {}\nVelocity: {}\n
-        call printstr  str_noteon
-        call printstr  str_note
-        move print_int data:midi_note_idx
-        move print_chr spacechr
+        move string_out str_noteon
+        move string_out str_note
+        move out data:midi_note_idx
+        move out spacechr
         call printnote data:midi_note_idx
-        move print_chr newlinechr
-        call printstr  str_velocity
-        move print_int data:midi_velocity_idx
-        move print_chr newlinechr
+        move out newlinechr
+        move string_out str_velocity
+        move out data:midi_velocity_idx
+        move out newlinechr
     jump end
 
     label polytouch
         ; Polyphonic Aftertouch (0xAn):\nNote: {}\nPressure: {}\n
-        call printstr  str_polytouch
-        call printstr  str_note
+        move string_out str_polytouch
+        move string_out str_note
         call printnote data:midi_note_idx
-        move print_chr newlinechr
-        call printstr  str_pressure
-        move print_int data:midi_note_pressure_idx
-        move print_chr newlinechr
+        move out newlinechr
+        move string_out str_pressure
+        move out data:midi_note_pressure_idx
+        move out newlinechr
     jump end
 
     label cc
         ; Control Change (0xBn)\nControl: {} ({})\nValue: {}\n
-        call printstr  str_cc
-        call printstr  str_control
-        move print_int data:midi_cc_controller_idx
+        move string_out str_cc
+        move string_out str_control
+        move out data:midi_cc_controller_idx
         ; TODO print reserved/common CCs
-        move print_chr newlinechr
-        call printstr  str_value
-        move print_int data:midi_cc_value_idx
-        move print_chr newlinechr
+        move out newlinechr
+        move string_out str_value
+        move out data:midi_cc_value_idx
+        move out newlinechr
     jump end
 
     label progch
         ; Program Change (0xCn): {}\n
-        call printstr  str_progch
-        move print_int data:midi_progch_prog_idx
-        move print_chr newlinechr
+        move string_out str_progch
+        move out data:midi_progch_prog_idx
+        move out newlinechr
     jump end
 
     label chantouch
         ; Channel Aftertouch (0xDn): {}\n
-        call printstr  str_chantouch
-        move print_int data:midi_chantouch_pressure_idx
-        move print_chr newlinechr
+        move string_out str_chantouch
+        move out data:midi_chantouch_pressure_idx
+        move out newlinechr
     jump end
 
     label pitchbend
         midi_dword_merge value data:midi_pitchbend_low_idx data:midi_pitchbend_high_idx
 
         ; Pitchbend (0xEn): {}\n
-        call printstr  str_pitchbend
-        move print_int value
-        move print_chr newlinechr
+        move string_out str_pitchbend
+        move out value
+        move out newlinechr
 
     label end
-        move print_chr newlinechr
+        move out newlinechr
 ret

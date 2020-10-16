@@ -17,11 +17,16 @@
  * along with crustymidi.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#ifndef _CRUSTYVM_H
+#define _CRUSTYVM_H
+
 #define CRUSTY_IO_READ_FUNC_DECL(X)   int (*X)(void *priv, \
                                                void *val, \
                                                unsigned int index)
 #define CRUSTY_IO_WRITE_FUNC_DECL(X)  int (*X)(void *priv, \
-                                               void *val, \
+                                               CrustyType type, \
+                                               unsigned int size, \
+                                               void *ptr, \
                                                unsigned int index)
 
 #define CRUSTY_FLAG_DEFAULTS (0)
@@ -43,6 +48,7 @@ typedef enum {
 } CrustyStatus;
 
 typedef enum {
+    CRUSTY_TYPE_NONE, /* for write-only callbacks */
     CRUSTY_TYPE_CHAR,
     CRUSTY_TYPE_INT,
     CRUSTY_TYPE_FLOAT
@@ -51,7 +57,7 @@ typedef enum {
 typedef struct {
     const char *name;
     unsigned int length;
-    CrustyType type;
+    CrustyType readType;
 
     CRUSTY_IO_READ_FUNC_DECL(read);
     void *readpriv;
@@ -62,11 +68,27 @@ typedef struct {
 typedef struct CrustyVM_s CrustyVM;
 
 /*
+ * Convenience function to open a file and set/check safepath.
+ *
+ * filename         Name of file to try opening.
+ * safepath         Pointer to a pointer to the name.  Must be a validpointer
+ *                  but it can point to a NULL pointer which will then be
+ *                  set to the new safe path.
+ * log_cb           see log_cb for crustyvm_new
+ * log_priv         see log_priv for crustyvm_new
+ */
+FILE *crustyvm_open_file(const char *filename,
+                         char **safepath,
+                         void (*log_cb)(void *priv, const char *fmt, ...),
+                         void *log_priv);
+ 
+/*
  * Load a program and prepare the VM to run.
  *
  * name             The name of the module.  Must be not NULL but only used for
  *                  messages passed to the user.
  * program          Buffer containing the program text.
+ * safepath         Path which files may be referenced from by (b)include.
  * len              Length of the program in bytes.
  * flags            Bitfield of flags which describe how certain things should
  *                  happen:
@@ -106,6 +128,7 @@ typedef struct CrustyVM_s CrustyVM;
  * returns          The newly loaded CrustyVM.
  */
 CrustyVM *crustyvm_new(const char *name,
+                       char *safepath,
                        const char *program,
                        long len,
                        unsigned int flags,
@@ -190,3 +213,7 @@ void crustyvm_debugtrace(CrustyVM *cvm, int full);
  */
 int crustyvm_has_entrypoint(CrustyVM *cvm, const char *name);
 
+unsigned int crustyvm_get_tokenmem(CrustyVM *cvm);
+unsigned int crustyvm_get_stackmem(CrustyVM *cvm);
+
+#endif

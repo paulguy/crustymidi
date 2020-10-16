@@ -81,191 +81,229 @@ incomplete.
  /| ---------------------------------
 |_| [-] CRUSTYVM SCRIPT REFERENCE [-]
   | ---------------------------------
+    Before anything is done, a pass is made to find all the tokens in the
+program.  Quoted strings act as a single token.  Comments are thrown out at
+this stage.  Comments begin with a ; and include everything following.  Quoted
+strings may contain ;s though.  At this point, only one statement is meaningful:
 
 include <filename>
-  Include a file in to the script.  It'll be as if the lines of filename replace
-  the include statement line.
+    Read in the file <filename> in the root directory of the script and start
+parsing tokens in from this file.  Care is taken that files above the script
+directory should be inaccessible to be included in to a script for safety
+reasons, but don't rely on it for security.  Make reasonably sure like any
+other program or script that you trust where it came from.
+
+Preprocesor Statements
+    The first step to a program running (after it's tokenized) is to run
+through and interpret the preprocessor statements, which are responsible for
+defining preprocessor-time variables, and rewriting statements based on those.
+Any time a single argument is needed to have spaces, it must be enclosed in
+quotes, otherwise it'll be interpreted as multiple arguments.  Quoted strings
+support the following escape sequences:
+\r  carriage return
+\n  new line
+\<carriage return>  ignore a carriage return in the string.  A following
+new line is also ignored
+\<new line>  ignore a new line in the string.  A following carriage return is
+also ignored
+\\  a literal \ (backslash)
+\xNN - a two digit hex number representing a byte literal
+\"  a literal " (quote)
+
+macro <name> [arguments ...]
+    Start a macro definition.  From here, lines will be passed over until
+until and endmacro statement with the same name is reached, at which time
+normal interpretation will resume.  The arguments are a list of symbols which
+when the macro is evaluated, will be replaced by whatever values were passed
+in when invoked.
+
+endmacro <name>
+    End the named macro definition.  Normal interpretation will resume.
+
+if <number> <name> [arguments ...]
+    If <number> is non-zero, start copying the named macro with the listed
+arguments.  <number> may also be an expression which is to be replaced by an
+expression or a macro argument, or it may also be a variable passed in on the
+command line with -D, in this case, it'll always evaluate to true, even if the
+variable is specified to be 0.
 
 expr <variable> <expression>
-  At script compile time, evaluate expression and assign its result to variable.
-  Like anything, any variables passed in with the -D argument, previous expr
-  statements or macro arguments will replace values in expression, anything not
-  replaced (not defined) will be evaluated as zeroes.  Expressions are all
-  evaluated as integers.
-  
-  Expressions may contain these various operations, and are evaluated in this
-  order:
-    *   Multiplication
-    /   Division
-    %   Modulo (Remainder)
-  ------
-    +   Addition
-    -   Subtraction 
-  ------
-    <<  Binary shift left
-    >>  Binary shift right
-  ------
-    <   Is less than (non-zero if less than, zero if not)
-    <=  Is less than or equal to
-    >   Is greater than
-    >=  Is greater than or equal to
-  ------
-    ==  Is equal to
-    !=  Is not equal to
-  ------
-    &   Binary AND
-    !&  Binary NAND
-  ------
-    |   Binary OR
-    !|  Binary NOR
-  ------
-    ^   Binary XOR
-    !^  Binary XNOR
+    Evaluate an expression down to a numerical value and assign it to
+<variable>.  At that point, any time <variable> appears in the program, it'll
+be replaced by the value which the expression evaluated to.  An expression can
+only accept integer values and all operations are done as integers and the
+result is an integer.  Expressions are arithmetic statements and support the
+following operators:
+*  multiplication
+/  division
+%  modulo
++  addition
+-  subtraction
+<<  binary shift left
+>>  binary shift right
+<  logical less than
+<=  logical less than or equal
+>  logical greater than
+>=  logical greater than or equal
+==  logical equals
+!=  logical not equals
+&  bitwise AND
+!&  bitwise NAND
+|  bitwise OR
+!|  bitwise NOR
+^  bitwise XOR
+!^ bitwise XNOR
+Parentheses are also supported for grouping, otherwise it follows the
+precedence followed is similar to that of C arithmetic parsing precedence.
 
-  This is done over each group of parentheses until there is only a single
-  number remaining.
+<macroname> <arguments ...>
+    Start evaluaing (copying) from macro and continue until the matched endmacro
+is reached.  Replacing any argument values with the arguments passed in.  All
+arguments specified must be provided.
 
-macro <name> [<arg1> <arg2> ...]
-statement...
-statement...
-...
-endmacro <name>
-  Define a macro name with optional arguments.  When a macro replacement is
-  being evaluated, strings matching any arguments will be replaced with the
-  string passed with the macro call, much in the way -D works, but only for the
-  length of the macro.  The name must be provided with endmacro so the
-  interpreter knows which macro you intend to end because macros may define
-  additional macros.
+Symbol Definition Statements
+    Following the preprocessing stage, the resulting code is scanned to find
+symbol definitions:  procedures, global (static) variables and procedure
+(local) variables.  Before this begins though, any callback variables defined
+by the VM will be added in as globals.
 
-<name> [<arg1> <arg2> ...]
-  Use a macro <name> with optional arguments.  You must provide the same number
-  of arguments as the macro defines as arguments.
+proc <name> [arguments ...]
+    Defines the start of procedure <name> and specifies which arguments, if
+any, it accepts.  Those arguments become local variables which reference the
+memory of the variables passed in, that is, any modifications to them in the
+procedure will persist when the procedure returns.
 
-if <value> <name> [<arg1> <arg2> ...]
-  If value evaluates to non-zero as written or after being replaced by -D, an
-  expr variable or a macro argument, start evaluating macro <name>.  Same rules
-  for arguments apply as an unconditional macro call.
-
-stack <value>
-  Accumulate additional stack memory for storing variables.  Typically the
-  default leaves enough memory for static variables and for every procedure to
-  be called before return once.  If more is necessary, this can accumulate more.
-
-static <name> [(#|ints|floats) <(#|#,#,..)>] [string <(word|"quoted string")>]
-  Define a static (global) variable which can be read or written from any
-  procedure and is initialized only once while the script is initialized. Can be
-  defined anywhere.
-
-  A single number as an argument defines the size of the array, omitting it
-  defaults to an array of 1, and the type in either case is assumed to be
-  integer, and the array will be initialized as all zeroes.
-  
-  'ints' or 'floats' instead, will explicitly specify the type to be integer or
-  floating point.  Arguments following are all treated as initializer values for
-  the array, even just an array of 1.
-
-  'string' instead, will specify that the next word or quoted string is to be
-  the initializer for a character array.  Quoted strings support some escape
-  sequences.  '\n' for line feed, '\n' for carriage return, '\\' for a single
-  backslash and a slash followed by a new line will consume the new line so it
-  doesn't appear in the string at all.
-
-  'ints' type is 32 bit signed integers.
-  'floats' type is double precision floats (may depend on platform).
-  'string' type is an array of 8 bit signed integers.  Writing larger values
-    will be casted down to 8 bits.
-
-local <name> [(#|ints|floats) <(#|#,#,..)>] [string <(word|"quoted string")>]
-  All the arguments are like the above, but this is to be defined within a
-  procedure.  These values will always be initialized on every procedure call,
-  including calls to 'init' and 'event'.
-
-proc <name> [<arg1> <arg2> ...]
-statement...
-statement...
-...
 ret
-  Define a procedure <name>, with optional arguments.  Arguments are treated as
-  local variables, but aren't initialized as they are just references to
-  variables passed in (modifying these variables inside the procedure will keep
-  them modified after the procedure returns, including local variables from
-  other procedures being passed in.).  An array length passed in is treated as
-  an array of size 1 containing the length and can be modified within the body
-  of the call, but does not affect the length of the array as this value can't
-  normally be written to.  An array index passed in will be accumulated and
-  index 0 within the procedure body will be the variable at the index passed in,
-  and additional calls will add up that index.
+    Return from procedure.  Marks the end of a procedure.
 
-call <name> [<arg1> <arg2> ...]
-  Call a procedure <name>, with optional arguments.  All arguments a procedure
-  requires must be provided.  Arguments are passed in as references.
+static <name> [N | ints <N | "N ..."> | floats <N | "N ..."> | string "..."]
+    Define a global (static) variable <name>.  If a single number is provided,
+it will act as a single integer initializer.  If a type is specified, a single
+value may be provided to create an array of that size, otherwise, multiple
+arguments may be specified in quotes, separated by spaces or tabs, to create
+an array of the size of values given and initialized with those values.  The
+exception is string, which can only be initialized with a single argument,
+quoted or not.  Values are initialized once, on VM start.  These may be
+specified anywhere, procedure or not.
 
-label <name>
-  Define a label <name>.  Necessary for changing program flow with jumps.  These
-  are local to each procedure, so procedures may reuse label names and jumps
-  cannot jump outside of their procedure.
+local <name> [N | ints <N | "N ..."> | floats <N | "N ..."> | string "..."]
+    Define a procedure (local) variable <name>.  The initializer is specified
+in the same way as global variables.  These values are initialized on each
+call to a procedure.  These can only be defined inside procedures.  Procedure
+variables must have unique names to global variables.
 
-move <destination> <source>
-  Move a value from source in to destination.  Source variable must be readable
-  and destination variable must be writable.  Not assuring this will result in a
-  compile or runtime error, depending on circumstances.  A callback access may
-  also result in a runtime error if the function indicates an error.
+stack
+    Not a real instruction, just indicate to accumulate stack.
 
-add <destination> <source>
-  Add source to destination and store in source, also update result register for
-  use with conditional jumps.  Source must be readable and destination must be
-  readable and writable.  Callbacks are not cached in any way, so using a
-  callback in the destination will result in a read and a write and callback in
-  source will result in a read.
+label
+    Define a label within a procedure to jump to.  Label names are scoped
+locally to procedures.
 
-sub <destination> <source>
-  Subtract destination and source; see 'add'.
+binclude <name> <chars | ints | floats> <filename> [start] [length]
+    Read in <filename> to be the initializer for a global variable <name>.  The
+type must be defined as chars (a string), ints (integer array) or floats
+(double array).  A start byte and length byte may be specified to include only
+a particular range of the file.  As many items of the size of type which fit
+within the file or provided length will be read in and used as the array
+initializer.  Like include, some care is taken to prevent arbitrary files
+above the script's directory from being read in.  The same warning applies.
 
-mul <destination> <source>
-  Multiply destination and source; see 'add'.
+Program Instructions
+    The final stage is parsing instructions and generating bytecode.  The
+language supports a fairly limited set of instructions, but ones which vaguely
+represent the selection of instructions one may have available on a more
+primitive platform, just with some added feature and artistic license for the
+sake of simplciity and safety, but bugs can certainly still come up.
 
-div <destination> <source>
-  Divide destination and source; see 'add'.
+move <destionation>[:<index>] <source>[:<index>]
+    Simply move a value from source to destination.  Source may be a variable,
+an integer immediate or a callback with the index passed to it, which will
+return a value.  Values will be converted to the type destination is before
+being stored.  If destination is a callback itself, it will be passed a
+reference to the source at the index provided, assuming it's not also a
+callback or an immediate, in which case only the single value ia passed in.
+All indexes are range checked to avoid hidden out of bounds accesses, in which
+case the program is terminated.  A read or write callback indicating an error
+will also terminate execution.  An index of 0 is implied if it's excluded.
 
-mod <destination> <source>
-  Modulo (remainder) destination and source; see 'add'.
+add <destination>[:<index>] <source>[:<index>]
+    Add <destionation> at <index> and <source at <index> then store the value
+in <destination>.  Source may be a callback in this case but destination
+cannot be, even if a callback may otherwise be readable and writeable.  If
+either destination or source is a float value, the operation will be done as
+if they are floats, but will be converted to the type of the destination,
+truncated to the range/precision of the type.  All other arithmetic operations
+follow similar rules.
 
-and <destination> <source>
-  Binary AND destination and source; see 'add'.
+sub <destination>[:<index>] <source>[:<index>]
+    Subtract.
 
-or <destination> <source>
-  Binary OR destination and source; see 'add'.
+mul <destination>[:<index>] <source>[:<index>]
+    Multiply.
 
-xor <destination> <source>
-  Binary XOR destination and source; see 'add'.
+div <destination>[:<index>] <source>[:<index>]
+    Divide.
 
-shr <destination> <amount>
-  Binary shift right destination by amount.  See 'add'.
+mod <destination>[:<index>] <source>[:<index>]
+    Modulo (remainder).
 
-shl <destination> <amount>
-  Binary shift left destination by amount.  See 'add'.
+and <destination>[:<index>] <source>[:<index>]
+    Bitwise AND.  Bitwise instructions follow similar access rules as
+arithmetic expressions, but they are restricted to operating on integer or
+string types.  A character of a string is converted to a 32 bit integer and
+padded out with 0s in its most significant bits.
 
-cmp <first operand> <second operand>
-  Subtract second operand from first operand and update result register.  No
-  variables are modified/written, only read, including callbacks.
+or <destination>[:<index>] <source>[:<index>]
+    Bitwise OR.
+
+xor <destination>[:<index>] <source>[:<index>]
+    Bitwise XOR.
+
+shr <destination>[:<index>] <source>[:<index>]
+    Bitwise shift right.  <source> may be a float, but the value will of course
+be converted to an integer.
+ 
+shl <destination>[:<index>] <source>[:<index>]
+    Bitwise shift left.
+
+cmp <destination>[:<index>] <source>[:<index>]
+    Compare (subtract) <destination> at <index> and <source> at <index>, but
+don't store it, simply hold on to the result for use with conditional jumps.
+Neither value necessarily needs to be writable, that is, either side or both
+sides can be an immediate or a read-only callback.  In reality, any value
+which would be written or passed on to a destination is stored as the result
+from any of the above operations, for use on a following conditional jump, but
+it is only 1 value, and it is always replaced on one of these operations,
+regardless.
 
 jump <label>
-  Jump to a label within the current procedure.  Jumps can be forward or
-  backward.
-
-jumpz <label>
-  Jump to a label if the result of the last operation is zero.
+    Jump to a label.
 
 jumpn <label>
-  Jump to a label if the result of the last operation is not zero.
+    Jump to a label if result is not zero.  From a cmp operation, this
+indicates that the two values were different.
+(cmp a b -> a != b)
+
+jumpz <label>
+    Jump to a label if the result is zero.  From a cmp operation, this
+indicates that the two values are equal.
+(cmp a b -> a == b)
 
 jumpl <label>
-  Jump to a label if the result of the last operation is less than zero.  For
-  example <first operand> - <second operand> will result in a value less than
-  zero if <first operand> is less than <second operand>.
+    jump to a label if the result is less than zero/negative.  From a cmp
+operation, this indicates that the left value is less than the right value.
+(cmp a b -> a < b)
 
 jumpg <label>
-  Jump to a label if the result of the last operation is greater than zero.
+    Jump to a label if the result is greater than zero/positive.  From a cmp
+operation, this indicates that the left value is greater than the right value.
+(cmp a b -> a > b)
+
+call <procedure> <arguments ...>
+    Call a procedure.  All arguments indicated by the procedure must be
+provided and are passed in as reference to the procedure and may be changed
+once the procedure returns.
+
 
  __
 |   ------------------------------------
